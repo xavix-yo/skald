@@ -189,11 +189,13 @@ impl ChatbotClient for AnthropicClient {
             .ok_or_else(|| anyhow::anyhow!("Missing content in Anthropic response"))?
             .to_string();
 
-        let input_tokens  = resp["usage"]["input_tokens"].as_u64().map(|n| n as u32);
-        let output_tokens = resp["usage"]["output_tokens"].as_u64().map(|n| n as u32);
+        let input_tokens          = resp["usage"]["input_tokens"].as_u64().map(|n| n as u32);
+        let output_tokens         = resp["usage"]["output_tokens"].as_u64().map(|n| n as u32);
+        let cache_read_tokens     = resp["usage"]["cache_read_input_tokens"].as_u64().map(|n| n as u32);
+        let cache_creation_tokens = resp["usage"]["cache_creation_input_tokens"].as_u64().map(|n| n as u32);
         info!(model = %options.model, ?input_tokens, ?output_tokens, "anthropic: chat response received");
 
-        Ok(ChatResponse { content, input_tokens, output_tokens, truncated: false, reasoning_content: None })
+        Ok(ChatResponse { content, input_tokens, output_tokens, truncated: false, reasoning_content: None, cache_read_tokens, cache_creation_tokens })
     }
 
     async fn chat_with_tools(
@@ -275,10 +277,12 @@ impl ChatbotClient for AnthropicClient {
             response_body:    Some(response_body),
         };
 
-        let stop_reason    = resp["stop_reason"].as_str().unwrap_or("");
-        let input_tokens   = resp["usage"]["input_tokens"].as_u64().map(|n| n as u32);
-        let output_tokens  = resp["usage"]["output_tokens"].as_u64().map(|n| n as u32);
-        let content_blocks = resp["content"].as_array().cloned().unwrap_or_default();
+        let stop_reason           = resp["stop_reason"].as_str().unwrap_or("");
+        let input_tokens          = resp["usage"]["input_tokens"].as_u64().map(|n| n as u32);
+        let output_tokens         = resp["usage"]["output_tokens"].as_u64().map(|n| n as u32);
+        let cache_read_tokens     = resp["usage"]["cache_read_input_tokens"].as_u64().map(|n| n as u32);
+        let cache_creation_tokens = resp["usage"]["cache_creation_input_tokens"].as_u64().map(|n| n as u32);
+        let content_blocks        = resp["content"].as_array().cloned().unwrap_or_default();
         info!(model = %options.model, ?input_tokens, ?output_tokens, stop_reason, "anthropic: chat_with_tools response received");
         if stop_reason == "max_tokens" {
             warn!(model = %options.model, ?output_tokens, "anthropic: response truncated (max_tokens reached)");
@@ -306,7 +310,7 @@ impl ChatbotClient for AnthropicClient {
                 })
                 .collect();
 
-            LlmTurn::ToolCalls { content: text, calls, input_tokens, output_tokens, reasoning_content: None }
+            LlmTurn::ToolCalls { content: text, calls, input_tokens, output_tokens, reasoning_content: None, cache_read_tokens, cache_creation_tokens }
         } else {
             let content = content_blocks
                 .iter()
@@ -316,7 +320,7 @@ impl ChatbotClient for AnthropicClient {
                 .to_string();
 
             let truncated = stop_reason == "max_tokens";
-            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content: None })
+            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content: None, cache_read_tokens, cache_creation_tokens })
         };
 
         Ok((turn, Some(raw_meta)))

@@ -10,23 +10,27 @@ use sqlx::SqlitePool;
 // ── Row struct ────────────────────────────────────────────────────────────────
 
 pub struct LlmRequestRow {
-    pub session_id:       Option<i64>,
-    pub stack_id:         Option<i64>,
-    pub model_name:       String,
+    pub session_id:            Option<i64>,
+    pub stack_id:              Option<i64>,
+    pub model_name:            String,
     /// Full HTTP request body sent to the provider (compact JSON, no pretty-print).
-    pub request_json:     String,
+    pub request_json:          String,
     /// HTTP request headers as a compact JSON object (api-key redacted).
-    pub request_headers:  Option<String>,
+    pub request_headers:       Option<String>,
     /// Full HTTP response body from the provider (compact JSON).
-    pub response_json:    Option<String>,
+    pub response_json:         Option<String>,
     /// HTTP response headers as a compact JSON object.
-    pub response_headers: Option<String>,
+    pub response_headers:      Option<String>,
     /// Error message when the HTTP call itself failed (no response available).
-    pub error_text:       Option<String>,
-    pub input_tokens:     Option<i64>,
-    pub output_tokens:    Option<i64>,
+    pub error_text:            Option<String>,
+    pub input_tokens:          Option<i64>,
+    pub output_tokens:         Option<i64>,
     /// Wall-clock time of the full HTTP round-trip in milliseconds.
-    pub duration_ms:      i64,
+    pub duration_ms:           i64,
+    /// Tokens served from the provider's prompt cache (already parsed by the client).
+    pub cache_read_tokens:     Option<i64>,
+    /// Tokens written into the provider's prompt cache (Anthropic only).
+    pub cache_creation_tokens: Option<i64>,
 }
 
 // ── Writes ────────────────────────────────────────────────────────────────────
@@ -37,8 +41,9 @@ pub async fn insert(pool: &SqlitePool, row: LlmRequestRow) -> Result<i64> {
             session_id, stack_id, model_name,
             request_json, request_headers,
             response_json, response_headers,
-            error_text, input_tokens, output_tokens, duration_ms
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            error_text, input_tokens, output_tokens, duration_ms,
+            cache_read_tokens, cache_creation_tokens
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(row.session_id)
@@ -52,6 +57,8 @@ pub async fn insert(pool: &SqlitePool, row: LlmRequestRow) -> Result<i64> {
     .bind(row.input_tokens)
     .bind(row.output_tokens)
     .bind(row.duration_ms)
+    .bind(row.cache_read_tokens)
+    .bind(row.cache_creation_tokens)
     .fetch_one(pool)
     .await?;
 

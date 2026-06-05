@@ -67,9 +67,10 @@ impl ChatbotClient for LoggingChatbotClient {
 
         match result {
             Ok((turn, meta)) => {
-                let (input_tokens, output_tokens) = match &turn {
-                    LlmTurn::Message(r) => (r.input_tokens, r.output_tokens),
-                    LlmTurn::ToolCalls { input_tokens, output_tokens, .. } => (*input_tokens, *output_tokens),
+                let (input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens) = match &turn {
+                    LlmTurn::Message(r) => (r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_creation_tokens),
+                    LlmTurn::ToolCalls { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, .. } =>
+                        (*input_tokens, *output_tokens, *cache_read_tokens, *cache_creation_tokens),
                 };
 
                 let meta = meta.unwrap_or_default();
@@ -87,10 +88,12 @@ impl ChatbotClient for LoggingChatbotClient {
                         request_headers,
                         response_json,
                         response_headers,
-                        error_text:    None,
-                        input_tokens:  input_tokens.map(|n| n as i64),
-                        output_tokens: output_tokens.map(|n| n as i64),
+                        error_text:            None,
+                        input_tokens:          input_tokens.map(|n| n as i64),
+                        output_tokens:         output_tokens.map(|n| n as i64),
                         duration_ms,
+                        cache_read_tokens:     cache_read_tokens.map(|n| n as i64),
+                        cache_creation_tokens: cache_creation_tokens.map(|n| n as i64),
                     }).await {
                         warn!(error = %e, "llm_requests: failed to insert log row");
                     }
@@ -111,10 +114,12 @@ impl ChatbotClient for LoggingChatbotClient {
                         request_headers: None,
                         response_json:   None,
                         response_headers: None,
-                        error_text:      Some(error_text),
-                        input_tokens:    None,
-                        output_tokens:   None,
+                        error_text:            Some(error_text),
+                        input_tokens:          None,
+                        output_tokens:         None,
                         duration_ms,
+                        cache_read_tokens:     None,
+                        cache_creation_tokens: None,
                     }).await {
                         warn!(error = %log_err, "llm_requests: failed to insert error log row");
                     }

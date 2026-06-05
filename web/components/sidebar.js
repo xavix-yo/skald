@@ -1,4 +1,4 @@
-import { html }         from 'lit';
+import { html, nothing } from 'lit';
 import { LightElement } from '../lib/base.js';
 
 
@@ -6,6 +6,7 @@ export class AppSidebar extends LightElement {
   static properties = {
     _activePage:  { state: true },
     _inboxCount:  { state: true },
+    _debugMode:   { state: true },
   };
 
   constructor() {
@@ -13,6 +14,7 @@ export class AppSidebar extends LightElement {
     this._activePage = null;
     this._inboxCount = 0;
     this._pollTimer  = null;
+    this._debugMode  = false;
   }
 
   connectedCallback() {
@@ -26,16 +28,27 @@ export class AppSidebar extends LightElement {
     window.addEventListener('inbox-count', (e) => {
       this._inboxCount = e.detail.count;
     });
+    window.addEventListener('debug-mode-change', (e) => {
+      this._debugMode = e.detail.enabled;
+    });
     // On load: home (root) if no hash, otherwise the matching page
     setTimeout(() => this._applyPage(this._pageFromHash()), 0);
     // Poll inbox count independently of whether the page is open.
     this._pollInbox();
     this._pollTimer = setInterval(() => this._pollInbox(), 10000);
+    this._loadDebugMode();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     clearInterval(this._pollTimer);
+  }
+
+  async _loadDebugMode() {
+    try {
+      const res = await fetch('/api/dev/debug_mode');
+      if (res.ok) this._debugMode = (await res.json()).enabled;
+    } catch { /* ignore */ }
   }
 
   async _pollInbox() {
@@ -52,7 +65,7 @@ export class AppSidebar extends LightElement {
     const hash = location.hash.slice(1);
     if (!hash) return 'home';
     const segment = hash.split('/')[0];
-    return ['inbox', 'cron', 'models', 'providers', 'approval', 'agents'].includes(segment) ? segment : 'home';
+    return ['inbox', 'cron', 'models', 'providers', 'approval', 'agents', 'llm-requests'].includes(segment) ? segment : 'home';
   }
 
   _applyPage(page) {
@@ -129,6 +142,16 @@ export class AppSidebar extends LightElement {
           <i class="bi bi-people"></i>
           <span class="sidebar-link-name">Agents</span>
         </a>
+
+        ${this._debugMode ? html`
+          <hr class="sidebar-divider" />
+          <a href="#llm-requests"
+             class="sidebar-link ${this._activePage === 'llm-requests' ? 'active' : ''}"
+             @click=${(e) => this._togglePage('llm-requests', e)}>
+            <i class="bi bi-journal-code"></i>
+            <span class="sidebar-link-name">LLM Requests</span>
+          </a>
+        ` : nothing}
       </nav>
 
     `;

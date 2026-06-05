@@ -161,9 +161,23 @@ Approval cards have a yellow left border; clarification cards have a blue left b
 
 ---
 
+## Debug Mode
+
+A persistent flag stored in the `config` DB table under key `DEBUG_MODE` (`"true"` / `"false"`). The API is in `src/api/dev.rs`.
+
+| Method | Path | Body | Response |
+| --- | --- | --- | --- |
+| `GET` | `/api/dev/debug_mode` | — | `{ "enabled": bool }` |
+| `POST` / `PUT` | `/api/dev/debug_mode` | `{ "enabled": bool }` | `{ "enabled": bool }` |
+
+The frontend reads this flag at startup and uses it to show or hide sections in the sidebar menu that are otherwise invisible in production.
+
+---
+
 ## When to Update This File
 
 - A `ServerEvent` variant is added, removed, or its fields change
 - `ClientMessage` gains or loses a field
 - A new Lit component is added
 - The approval message format changes
+- The debug-mode endpoint changes

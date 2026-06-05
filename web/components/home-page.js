@@ -52,18 +52,22 @@ export class HomePage extends InboxMixin(LightElement) {
   static get properties() {
     return {
       ...super.properties,
-      _open:    { state: true },
-      _models:  { state: true },
-      _plugins: { state: true },
+      _open:         { state: true },
+      _models:       { state: true },
+      _plugins:      { state: true },
+      _debugMode:    { state: true },
+      _debugLoading: { state: true },
     };
   }
 
   constructor() {
     super();
-    this._open      = false;
-    this._models    = null;   // null = loading, [] = no models configured
-    this._plugins   = null;
-    this._pollTimer = null;
+    this._open         = false;
+    this._models       = null;   // null = loading, [] = no models configured
+    this._plugins      = null;
+    this._pollTimer    = null;
+    this._debugMode    = false;
+    this._debugLoading = true;
   }
 
   connectedCallback() {
@@ -102,7 +106,37 @@ export class HomePage extends InboxMixin(LightElement) {
       this._loadModels(),
       this._loadPlugins(),
       this._loadInbox(),
+      this._loadDebugMode(),
     ]);
+  }
+
+  async _loadDebugMode() {
+    try {
+      const res = await fetch('/api/dev/debug_mode');
+      if (!res.ok) throw new Error();
+      const data = await res.json();
+      this._debugMode = data.enabled;
+    } catch {
+      // ignore, keep current value
+    } finally {
+      this._debugLoading = false;
+    }
+  }
+
+  async _toggleDebugMode() {
+    const next = !this._debugMode;
+    this._debugMode = next;
+    try {
+      const res = await fetch('/api/dev/debug_mode', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ enabled: next }),
+      });
+      if (!res.ok) throw new Error();
+      window.dispatchEvent(new CustomEvent('debug-mode-change', { detail: { enabled: next } }));
+    } catch {
+      this._debugMode = !next;
+    }
   }
 
   async _loadModels() {
@@ -152,6 +186,20 @@ export class HomePage extends InboxMixin(LightElement) {
 
     return html`
       <div class="home-page">
+
+        <!-- ── Debug toggle ── -->
+        <div class="home-debug-bar">
+          <label class="home-debug-toggle" title="${this._debugMode ? 'Debug mode on' : 'Debug mode off'}">
+            <i class="bi bi-bug-fill"></i>
+            <span>Debug</span>
+            <div class="form-check form-switch mb-0">
+              <input class="form-check-input" type="checkbox"
+                     .checked=${this._debugMode}
+                     @change=${this._toggleDebugMode}
+                     ?disabled=${this._debugLoading} />
+            </div>
+          </label>
+        </div>
 
         <!-- ── Hero ── -->
         <div class="home-hero">

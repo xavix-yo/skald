@@ -142,7 +142,7 @@ impl ChatSessionHandler {
                     });
                 }
 
-                LlmTurn::ToolCalls { content: assistant_text, calls, input_tokens, output_tokens, reasoning_content } => {
+                LlmTurn::ToolCalls { content: assistant_text, calls, input_tokens, output_tokens, reasoning_content, .. } => {
                     let message_id = chat_history::append(
                         pool, stack_id, &chat_history::Role::Assistant, &assistant_text, false,
                         reasoning_content.as_deref(),

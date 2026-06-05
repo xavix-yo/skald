@@ -54,14 +54,21 @@ pub struct LlmRawMeta {
 /// The response from a chat completion (text only).
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
-    pub content:           String,
-    pub input_tokens:      Option<u32>,
-    pub output_tokens:     Option<u32>,
+    pub content:              String,
+    pub input_tokens:         Option<u32>,
+    pub output_tokens:        Option<u32>,
     /// True when the model stopped due to hitting the token limit.
-    pub truncated:         bool,
+    pub truncated:            bool,
     /// Chain-of-thought produced by reasoning models (e.g. DeepSeek thinking mode).
     /// Must be echoed back in the assistant message on subsequent turns.
-    pub reasoning_content: Option<String>,
+    pub reasoning_content:    Option<String>,
+    /// Tokens served from the provider's prompt cache (Anthropic: cache_read_input_tokens,
+    /// OpenAI: prompt_tokens_details.cached_tokens). None when the provider does not
+    /// report cache metrics.
+    pub cache_read_tokens:    Option<u32>,
+    /// Tokens written into the provider's prompt cache (Anthropic only:
+    /// cache_creation_input_tokens). None for providers that do not expose this.
+    pub cache_creation_tokens: Option<u32>,
 }
 
 /// A single tool call requested by the LLM.
@@ -77,11 +84,13 @@ pub struct ToolCall {
 pub enum LlmTurn {
     Message(ChatResponse),
     ToolCalls {
-        content:           String,
-        calls:             Vec<ToolCall>,
-        input_tokens:      Option<u32>,
-        output_tokens:     Option<u32>,
-        reasoning_content: Option<String>,
+        content:               String,
+        calls:                 Vec<ToolCall>,
+        input_tokens:          Option<u32>,
+        output_tokens:         Option<u32>,
+        reasoning_content:     Option<String>,
+        cache_read_tokens:     Option<u32>,
+        cache_creation_tokens: Option<u32>,
     },
 }
 

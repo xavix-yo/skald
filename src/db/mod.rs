@@ -458,5 +458,18 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
         .await?;
     }
 
+    if version < 3 {
+        sqlx::query("ALTER TABLE llm_requests ADD COLUMN cache_read_tokens     INTEGER")
+            .execute(pool).await.ok();
+        sqlx::query("ALTER TABLE llm_requests ADD COLUMN cache_creation_tokens INTEGER")
+            .execute(pool).await.ok();
+        sqlx::query(
+            "INSERT OR REPLACE INTO config(key, value, updated_at)
+             VALUES('schema_version', '3', datetime('now'))",
+        )
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }

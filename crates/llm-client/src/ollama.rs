@@ -71,6 +71,6 @@ impl ChatbotClient for OllamaClient {
         let input_tokens  = resp["prompt_eval_count"].as_u64().map(|n| n as u32);
         let output_tokens = resp["eval_count"].as_u64().map(|n| n as u32);
 
-        Ok(ChatResponse { content, input_tokens, output_tokens, truncated: false, reasoning_content: None })
+        Ok(ChatResponse { content, input_tokens, output_tokens, truncated: false, reasoning_content: None, cache_read_tokens: None, cache_creation_tokens: None })
     }
 }

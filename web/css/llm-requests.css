@@ -1,0 +1,193 @@
+/* ── LLM Requests page ──────────────────────────────────────────────────────── */
+
+llm-requests-page {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+.llmr-page {
+  padding: 1.5rem 2rem;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────────── */
+
+.llmr-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--bs-border-color);
+  padding-bottom: 1rem;
+}
+
+.llmr-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.llmr-title i { color: var(--bs-secondary-color); }
+
+.llmr-total-badge {
+  margin-left: auto;
+  font-size: 0.78rem;
+  color: var(--bs-secondary-color);
+  background: var(--bs-tertiary-bg);
+  padding: 2px 10px;
+  border-radius: 20px;
+}
+
+/* ── Filters ─────────────────────────────────────────────────────────────────── */
+
+.llmr-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+  padding: 0.875rem 1rem;
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 8px;
+}
+
+.llmr-filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.llmr-filter-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bs-secondary-color);
+}
+
+.llmr-filter-group input {
+  width: 160px;
+}
+
+.llmr-filter-group input[type="date"] {
+  width: 140px;
+}
+
+.llmr-filter-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding-bottom: 1px;
+}
+
+/* ── State (loading / empty / error) ────────────────────────────────────────── */
+
+.llmr-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 3rem 1rem;
+  color: var(--bs-secondary-color);
+  font-size: 0.88rem;
+}
+
+.llmr-state i { font-size: 1.1rem; }
+
+.llmr-state--error { color: var(--bs-danger); }
+
+/* ── Table ───────────────────────────────────────────────────────────────────── */
+
+.llmr-table-wrap {
+  overflow-x: auto;
+}
+
+.llmr-table {
+  font-size: 0.82rem;
+  margin: 0;
+}
+
+.llmr-table thead th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bs-secondary-color);
+  border-bottom-width: 1px;
+  white-space: nowrap;
+}
+
+.llmr-table tbody tr:hover td { background: var(--bs-tertiary-bg); }
+
+.llmr-row--error td { color: var(--bs-danger); }
+
+.llmr-row--error-detail td {
+  font-size: 0.78rem;
+  color: var(--bs-danger);
+  padding-top: 0;
+  border-top: none;
+  background: color-mix(in srgb, var(--bs-danger) 5%, transparent);
+}
+
+.llmr-row--error-detail i { margin-right: 4px; }
+
+.llmr-model {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--bs-font-monospace);
+  font-size: 0.78rem;
+}
+
+.llmr-date {
+  white-space: nowrap;
+  color: var(--bs-secondary-color);
+}
+
+.llmr-num {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--bs-font-monospace);
+  font-size: 0.78rem;
+}
+
+.llmr-cache-hit { color: var(--bs-success); font-weight: 600; }
+
+.llmr-badge-agent,
+.llmr-badge-source {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 500;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-secondary-color);
+  font-family: var(--bs-font-monospace);
+}
+
+.llmr-badge-agent { color: #7c3aed; background: color-mix(in srgb, #7c3aed 10%, transparent); }
+.llmr-badge-source { color: #0369a1; background: color-mix(in srgb, #0369a1 10%, transparent); }
+
+/* ── Pagination ──────────────────────────────────────────────────────────────── */
+
+.llmr-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0 1rem;
+}
+
+.llmr-page-info {
+  font-size: 0.82rem;
+  color: var(--bs-secondary-color);
+}
