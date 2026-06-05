@@ -1,4 +1,5 @@
 mod db;
+pub mod elevenlabs_audio;
 pub mod manager;
 pub mod openai_audio;
 

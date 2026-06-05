@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use axum::{Json, extract::State, http::StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -115,10 +117,17 @@ pub async fn list_models(
     let provider_ids: Vec<i64> = mgr.list_providers_info().await
         .into_iter().map(|p| p.id).collect();
 
+    const PER_PROVIDER_TIMEOUT: Duration = Duration::from_secs(5);
+
     let mut tasks = tokio::task::JoinSet::new();
     for id in provider_ids {
         let mgr = mgr.clone();
-        tasks.spawn(async move { let _ = mgr.list_provider_models(id).await; });
+        tasks.spawn(async move {
+            let _ = tokio::time::timeout(
+                PER_PROVIDER_TIMEOUT,
+                mgr.list_provider_models(id),
+            ).await;
+        });
     }
     while tasks.join_next().await.is_some() {}
 
@@ -208,6 +217,7 @@ fn parse_provider(s: &str) -> Result<LlmProvider, ApiError> {
         "openrouter" => Ok(LlmProvider::OpenRouter),
         "anthropic"  => Ok(LlmProvider::Anthropic),
         "deepseek"   => Ok(LlmProvider::DeepSeek),
+        "elevenlabs" => Ok(LlmProvider::ElevenLabs),
         other        => Err(ApiError::bad_request(format!("unknown provider type '{other}'"))),
     }
 }

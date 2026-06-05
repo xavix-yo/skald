@@ -20,6 +20,12 @@ const CARDS = [
     title: 'Image Generation',
     desc:  'Text-to-image models via cloud API',
   },
+  {
+    id:    'tts',
+    icon:  'bi-volume-up',
+    title: 'Text-to-Speech',
+    desc:  'Speech synthesis models via cloud or local plugin',
+  },
 ];
 
 export class ModelsHubPage extends LightElement {
@@ -32,7 +38,7 @@ export class ModelsHubPage extends LightElement {
   constructor() {
     super();
     this._section = null;
-    this._counts  = { llm: 0, transcribe: 0, image: 0 };
+    this._counts  = { llm: 0, transcribe: 0, image: 0, tts: 0 };
     this._loading = false;
   }
 
@@ -51,7 +57,7 @@ export class ModelsHubPage extends LightElement {
   _sectionFromHash() {
     const parts = location.hash.slice(1).split('/');
     if (parts[0] === 'models' && parts[1]) {
-      return ['llm', 'transcribe', 'image'].includes(parts[1]) ? parts[1] : null;
+      return ['llm', 'transcribe', 'image', 'tts'].includes(parts[1]) ? parts[1] : null;
     }
     return null;
   }
@@ -59,20 +65,23 @@ export class ModelsHubPage extends LightElement {
   async _loadCounts() {
     this._loading = true;
     try {
-      const [llmRes, tRes, igRes] = await Promise.all([
+      const [llmRes, tRes, igRes, ttsRes] = await Promise.all([
         fetch('/api/llm/models'),
         fetch('/api/transcribe/models'),
         fetch('/api/image-generate/models'),
+        fetch('/api/tts/models'),
       ]);
-      const [llm, transcribe, image] = await Promise.all([
-        llmRes.ok ? llmRes.json() : [],
-        tRes.ok   ? tRes.json()   : [],
-        igRes.ok  ? igRes.json()  : [],
+      const [llm, transcribe, image, tts] = await Promise.all([
+        llmRes.ok  ? llmRes.json()  : [],
+        tRes.ok    ? tRes.json()    : [],
+        igRes.ok   ? igRes.json()   : [],
+        ttsRes.ok  ? ttsRes.json()  : [],
       ]);
       this._counts = {
-        llm:       llm.length,
+        llm:        llm.length,
         transcribe: transcribe.length,
-        image:     image.length,
+        image:      image.length,
+        tts:        tts.length,
       };
     } catch {
       // counts stay at 0 on error — non-critical
@@ -103,6 +112,7 @@ export class ModelsHubPage extends LightElement {
         ${this._section === 'llm'        ? html`<models-llm-section .onback=${() => this._goBack()}></models-llm-section>`        : ''}
         ${this._section === 'transcribe' ? html`<models-transcribe-section .onback=${() => this._goBack()}></models-transcribe-section>` : ''}
         ${this._section === 'image'      ? html`<models-image-section .onback=${() => this._goBack()}></models-image-section>`    : ''}
+        ${this._section === 'tts'        ? html`<models-tts-section .onback=${() => this._goBack()}></models-tts-section>`          : ''}
       `;
     }
 

@@ -71,6 +71,8 @@ The goal is to allow plugins to live in their own workspace crates without depen
 | `remote_connectivity` | `crates/plugin-tailscale-remote/` | [remote.md](remote.md) |
 | `whisper_local` | `crates/plugin-transcribe-whisper-local/` | [whisper-local.md](whisper-local.md) |
 | `telegram` | `crates/plugin-telegram-bot/` | [telegram.md](telegram.md) |
+| `orpheus_tts_3b` | `crates/plugin-tts-orpheus-3b/` | [tts-providers.md](tts-providers.md) |
+| `kokoro_tts` | `crates/plugin-tts-kokoro/` | [tts-providers.md](tts-providers.md) |
 
 ### Remaining in main crate
 

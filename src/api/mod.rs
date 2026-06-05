@@ -10,6 +10,7 @@ pub mod mcp;
 pub mod plugins;
 pub mod sessions;
 pub mod transcribe_models;
+pub mod tts_models;
 pub mod ws;
 
 use std::sync::Arc;
@@ -49,6 +50,9 @@ pub fn router() -> Router<AppState> {
         // Image generation models
         .route("/image-generate/models",        get(image_generate_models::list_models).post(image_generate_models::create_model))
         .route("/image-generate/models/{id}",   get(image_generate_models::get_model).put(image_generate_models::update_model).delete(image_generate_models::delete_model))
+        // TTS models
+        .route("/tts/models",                   get(tts_models::list_models).post(tts_models::create_model))
+        .route("/tts/models/{id}",              get(tts_models::get_model).put(tts_models::update_model).delete(tts_models::delete_model))
         // Cron jobs
         .route("/cron/jobs",                    get(cron::list))
         .route("/cron/jobs/{id}",               delete(cron::delete_job))

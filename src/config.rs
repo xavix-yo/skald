@@ -155,6 +155,13 @@ pub enum LlmStrength {
     VeryHigh,
 }
 
+/// Discriminator stored in the `llm_providers` DB table and used throughout the
+/// provider/manager/builder chain to route credentials to the right client.
+///
+/// **Legacy name** — despite being called `LlmProvider`, this enum covers *all*
+/// external API providers, including those that do only TTS or only Transcription
+/// (e.g. ElevenLabs). Renaming it to `ApiProvider` or `ServiceProvider` would be
+/// the right call but requires a wide refactor; left for a future pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LlmProvider {
@@ -168,6 +175,9 @@ pub enum LlmProvider {
     Anthropic,
     #[serde(rename = "deepseek")]
     DeepSeek,
+    /// TTS + Transcription only — does not support LLM chat/completion.
+    #[serde(rename = "elevenlabs")]
+    ElevenLabs,
 }
 
 impl Config {

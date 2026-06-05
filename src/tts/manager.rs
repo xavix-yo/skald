@@ -22,6 +22,7 @@ use crate::config::LlmProvider;
 use crate::llm::LlmProviderRecord;
 use crate::llm::db as llm_db;
 
+use super::elevenlabs_tts::ElevenLabsTtsSynthesiser;
 use super::openai_tts::OpenAiTtsSynthesiser;
 use super::{TextToSpeech, TtsModelInfo, TtsModelRecord};
 use super::db as tts_db;
@@ -246,6 +247,16 @@ fn build_synthesiser(
             provider.api_key.clone()
                 .with_context(|| format!("provider '{}': api_key required for openrouter", provider.name))?,
         ),
+        LlmProvider::ElevenLabs => {
+            let api_key = provider.api_key.clone()
+                .with_context(|| format!("provider '{}': api_key required for elevenlabs", provider.name))?;
+            return Ok(Arc::new(ElevenLabsTtsSynthesiser::new(
+                &model.name,
+                api_key,
+                &model.model_id,
+                model.instructions.clone(),
+            )));
+        }
         other => anyhow::bail!(
             "provider type '{:?}' does not support text-to-speech", other
         ),

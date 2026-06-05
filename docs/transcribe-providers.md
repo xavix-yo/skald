@@ -8,10 +8,11 @@ Cloud Speech-to-Text via any OpenAI-compatible audio transcription endpoint.
 
 ```text
 src/transcribe/
-  mod.rs           — Transcribe trait, TranscribeModelRecord/Info, re-exports
-  db.rs            — SQL layer for transcribe_models table
-  manager.rs       — TranscribeManager (DB-aware, owns the table)
-  openai_audio.rs  — OpenAiAudioTranscriber: impl Transcribe via HTTP multipart
+  mod.rs                — Transcribe trait, TranscribeModelRecord/Info, re-exports
+  db.rs                 — SQL layer for transcribe_models table
+  manager.rs            — TranscribeManager (DB-aware, owns the table)
+  openai_audio.rs       — OpenAiAudioTranscriber: impl Transcribe via HTTP multipart
+  elevenlabs_audio.rs   — ElevenLabsTranscriber: impl Transcribe via ElevenLabs Scribe API
 ```
 
 `TranscribeManager` holds two kinds of providers:
@@ -74,10 +75,25 @@ No local conversion needed — the provider handles decoding server-side.
 
 ### Supported providers
 
-| Provider   | `base_url`                          | Notes                          |
-|------------|-------------------------------------|--------------------------------|
-| OpenRouter | `https://openrouter.ai/api/v1`      | Model: `openai/whisper-1`, etc.|
-| OpenAI     | `https://api.openai.com/v1`         | Model: `whisper-1`             |
+| Provider | `base_url` | Notes |
+| -------- | ---------- | ----- |
+| OpenRouter | `https://openrouter.ai/api/v1` | Model: `openai/whisper-1`, etc. |
+| OpenAI | `https://api.openai.com/v1` | Model: `whisper-1` |
+
+---
+
+## ElevenLabsTranscriber
+
+Implemented in `src/transcribe/elevenlabs_audio.rs`.
+
+Calls `POST https://api.elevenlabs.io/v1/speech-to-text` with auth header `xi-api-key` (not Bearer) and a `multipart/form-data` body:
+
+| Field | Value |
+| ----- | ----- |
+| `file` | Raw audio bytes |
+| `model_id` | ElevenLabs Scribe model (e.g. `scribe_v1`) — stored as `model_id` in the DB record |
+
+Returns `{ "text": "..." }`. Provider type: `elevenlabs`.
 
 Which providers support transcription is declared statically via `ProviderCaps::supported_types()` — see [llm-clients.md](llm-clients.md#provider-caps--model-types).
 

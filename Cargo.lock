@@ -2461,6 +2461,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugin-tts-kokoro"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "core-api",
+ "reqwest 0.13.4",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "plugin-tts-orpheus-3b"
 version = "0.1.0"
 dependencies = [
@@ -3371,6 +3384,7 @@ dependencies = [
  "plugin-tailscale-remote",
  "plugin-telegram-bot",
  "plugin-transcribe-whisper-local",
+ "plugin-tts-kokoro",
  "plugin-tts-orpheus-3b",
  "quote",
  "rand 0.10.1",

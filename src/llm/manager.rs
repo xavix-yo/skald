@@ -588,6 +588,13 @@ fn build_entry(
                 .with_context(|| format!("provider '{}': api_key required for deepseek", provider.name))?;
             Arc::new(OpenAiClient::new("https://api.deepseek.com/v1", key, extra.clone(), false))
         }
+        LlmProvider::ElevenLabs => {
+            anyhow::bail!(
+                "provider '{}': ElevenLabs does not support LLM chat/completion — \
+                 it can only be used for TTS and Transcription models",
+                provider.name,
+            )
+        }
     };
 
     let client: Arc<dyn ChatbotClient> = match log_pool {

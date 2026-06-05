@@ -48,6 +48,7 @@ The project is a Cargo workspace. Extracted crates live in `crates/`:
 | `plugin-transcribe-whisper-local` | `crates/plugin-transcribe-whisper-local/` | Local STT via whisper.cpp (Metal-accelerated) |
 | `plugin-telegram-bot` | `crates/plugin-telegram-bot/` | Private Telegram bot interface |
 | `plugin-tts-orpheus-3b` | `crates/plugin-tts-orpheus-3b/` | Local TTS via Orpheus 3B (Python subprocess) |
+| `plugin-tts-kokoro` | `crates/plugin-tts-kokoro/` | Local TTS via Kokoro ONNX (lightweight, multilingual) |
 
 To add a new extracted crate: create `crates/<name>/`, add it to the `[workspace].members` list in the root `Cargo.toml`, then add a `path` dependency in `[dependencies]`.
 
@@ -77,14 +78,15 @@ To add a new extracted crate: create `crates/<name>/`, add it to the `[workspace
 | `crates/plugin-transcribe-whisper-local/` | Local STT via whisper.cpp (standalone crate) | [whisper-local.md](whisper-local.md) |
 | `crates/plugin-telegram-bot/` | Private Telegram bot (standalone crate) | [telegram.md](telegram.md) |
 | `crates/plugin-tts-orpheus-3b/` | Orpheus TTS 3B — local TTS via Python subprocess (standalone crate) | [tts-providers.md](tts-providers.md) |
+| `crates/plugin-tts-kokoro/` | Kokoro ONNX — lightweight local TTS, multilingual (standalone crate) | [tts-providers.md](tts-providers.md) |
 | `crates/honcho-client/` | Honcho v3 REST API client (standalone crate) | [honcho.md](honcho.md) |
 | `src/secrets.rs` | SecretsStore — centralised token/key store over SQLite | [secrets.md](secrets.md) |
-| `src/transcribe/` | Transcribe trait, TranscribeManager, OpenAiAudioTranscriber | [transcribe-providers.md](transcribe-providers.md) |
-| `src/tts/` | TextToSpeech trait, TtsManager (DB-backed + plugin slots), OpenAiTtsSynthesiser | [tts-providers.md](tts-providers.md) |
+| `src/transcribe/` | Transcribe trait, TranscribeManager, OpenAiAudioTranscriber, ElevenLabsTranscriber | [transcribe-providers.md](transcribe-providers.md) |
+| `src/tts/` | TextToSpeech trait, TtsManager (DB-backed + plugin slots), OpenAiTtsSynthesiser, ElevenLabsTtsSynthesiser | [tts-providers.md](tts-providers.md) |
 | `src/image_generate/` | ImageGenerate trait, ImageGeneratorManager (DB-backed + plugin slots), OpenRouterImageGenerator | [image-generate.md](image-generate.md) |
 | `src/db/` | SQLite schema and queries | [database.md](database.md) |
 | `src/events.rs` | WS protocol types | [frontend.md](frontend.md) |
-| `src/config.rs` | Config file loading | [logging-config.md](logging-config.md) |
+| `src/config.rs` | Config file loading; `LlmProvider` enum (legacy name — covers all API providers including TTS-only ones like ElevenLabs) | [logging-config.md](logging-config.md) |
 | `web/components/` | Lit frontend components | [frontend.md](frontend.md) |
 | `run.sh` | Supervisor loop | [self-rewriting.md](self-rewriting.md) |
 

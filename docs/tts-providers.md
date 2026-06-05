@@ -1,6 +1,6 @@
 # Text-to-Speech Providers
 
-Cloud TTS via any OpenAI-compatible audio speech endpoint, plus plugin-registered local engines.
+Cloud TTS via OpenAI-compatible or ElevenLabs endpoints, plus plugin-registered local engines.
 
 ---
 
@@ -13,18 +13,19 @@ crates/core-api/src/tts.rs
   — TtsRegistry trait (plugin write-side: register/unregister)
 
 src/tts/
-  mod.rs         — TtsModelRecord/Info, re-exports TextToSpeech/TtsProvider/TtsRegistry
-  db.rs          — SQL layer for tts_models table
-  manager.rs     — TtsManager (DB-aware, owns the table, impls TtsProvider + TtsRegistry)
-  openai_tts.rs  — OpenAiTtsSynthesiser: impl TextToSpeech via HTTP JSON
+  mod.rs              — TtsModelRecord/Info, re-exports TextToSpeech/TtsProvider/TtsRegistry
+  db.rs               — SQL layer for tts_models table
+  manager.rs          — TtsManager (DB-aware, owns the table, impls TtsProvider + TtsRegistry)
+  openai_tts.rs       — OpenAiTtsSynthesiser: impl TextToSpeech via OpenAI-compatible HTTP JSON
+  elevenlabs_tts.rs   — ElevenLabsTtsSynthesiser: impl TextToSpeech via ElevenLabs v1 API
 ```
 
 Two kinds of providers coexist:
 
 | Kind | Source | Example |
 | ---- | ------ | ------- |
-| **DB-backed** | `tts_models` table, built from `llm_providers` credentials | `OpenAiTtsSynthesiser` |
-| **Plugin-registered** | Ephemeral — registered at runtime by plugins | `OrpheusTtsPlugin`, future: `KokoroPlugin`, `PiperPlugin` |
+| **DB-backed** | `tts_models` table, built from `llm_providers` credentials | `OpenAiTtsSynthesiser`, `ElevenLabsTtsSynthesiser` |
+| **Plugin-registered** | Ephemeral — registered at runtime by plugins | `OrpheusTtsPlugin`, `KokoroTtsPlugin` |
 
 `get()` returns the first plugin provider (if any is running), then the first DB-backed provider ordered by `priority ASC`.
 
@@ -113,8 +114,40 @@ Returns raw MP3 bytes.
 ### Supported providers
 
 | Provider | `base_url` | Notes |
-|----------|-----------|-------|
+| -------- | ---------- | ----- |
 | OpenAI | `https://api.openai.com/v1` | Models: `tts-1`, `tts-1-hd`, `gpt-4o-mini-tts` |
+| OpenRouter | `https://openrouter.ai/api/v1` | OpenAI-compatible endpoint |
+
+---
+
+## ElevenLabsTtsSynthesiser
+
+Implemented in `src/tts/elevenlabs_tts.rs`.
+
+Calls `POST https://api.elevenlabs.io/v1/text-to-speech/{voice_id}` with auth header `xi-api-key` (not Bearer).
+
+| Field in DB record | Meaning |
+| ------------------ | ------- |
+| `model_id` | ElevenLabs **voice ID** (e.g. `21m00Tcm4TlvDq8ikWAM`) |
+| `instructions` | Injected into LLM system prompt; not sent to ElevenLabs API |
+
+The ElevenLabs generation model is fixed to `eleven_multilingual_v2`. Returns raw MP3 bytes.
+
+Provider type: `elevenlabs` — requires an `xi-api-key` stored in `llm_providers.api_key`. No `base_url` needed.
+
+---
+
+## REST API
+
+| Method | Path | Description |
+| ------ | ---- | ----------- |
+| `GET` | `/api/tts/models` | All models — plugin-registered first (`from_plugin: true`), then DB-backed |
+| `POST` | `/api/tts/models` | Add a new TTS model |
+| `GET` | `/api/tts/models/{id}` | Get a DB-backed model record |
+| `PUT` | `/api/tts/models/{id}` | Update a DB-backed model |
+| `DELETE` | `/api/tts/models/{id}` | Soft-delete a DB-backed model |
+
+Handled by `src/api/tts_models.rs`.
 
 ---
 
@@ -164,6 +197,41 @@ ctx.tts_registry.unregister("kokoro_local").await;
 
 ---
 
+## Kokoro TTS (`plugin-tts-kokoro`)
+
+Lightweight local TTS using the Kokoro ONNX model (~310 MB model + ~27 MB voices). No PyTorch or GPU required — runs fully on CPU via ONNX Runtime.
+
+**Crate:** `crates/plugin-tts-kokoro/`
+**Plugin ID:** `kokoro_tts`
+
+### How it works
+
+The Python server (`kokoro_server.py`) is embedded in the crate via `include_str!`. On start the plugin writes it to a temp path and spawns it as a FastAPI subprocess. The server downloads `kokoro-v1.0.onnx` and `voices-v1.0.bin` from GitHub Releases on first run, then exposes `POST /synthesize` returning WAV bytes. The plugin registers itself with `TtsManager` and deregisters on stop.
+
+### Setup
+
+```text
+toggle_plugin("kokoro_tts", true)
+```
+
+Optional config:
+
+```json
+{ "voice": "if_sara", "lang": "it", "speed": 1.0 }
+```
+
+### Config
+
+| Field | Values | Default |
+| ----- | ------ | ------- |
+| `voice` | Any Kokoro voice ID (e.g. `if_sara`, `im_nicola`, `af_heart`) | `if_sara` |
+| `lang` | BCP-47 language code | `it` |
+| `speed` | Speech rate multiplier | `1.0` |
+
+Python deps (in `requirements.txt`): `kokoro-onnx`, `soundfile`.
+
+---
+
 ## Orpheus TTS 3B (`plugin-tts-orpheus-3b`)
 
 Local, on-device TTS using the Orpheus 3B model. Runs a Python subprocess for inference.
@@ -171,11 +239,11 @@ Local, on-device TTS using the Orpheus 3B model. Runs a Python subprocess for in
 **Crate:** `crates/plugin-tts-orpheus-3b/`  
 **Plugin ID:** `orpheus_tts_3b`
 
-### How it works
+**Note:** the FP16 model is large (~6 GB) and uses significant RAM during inference. Prefer `int8` quantization on memory-constrained machines, or use `plugin-tts-kokoro` as a lighter alternative.
 
-The Python inference server (`orpheus_server.py`) is **embedded in the plugin binary** via `include_str!`. On start, the plugin writes it to `models/orpheus-3b/orpheus_server.py` and spawns it. The server prints `PORT:<n>` to stdout when ready; the plugin reads that port and registers itself as a `TextToSpeech` provider. On stop, the subprocess is killed and the script file is removed.
+**How it works:** the Python inference server (`orpheus_server.py`) is embedded in the plugin binary via `include_str!`. On start, the plugin writes it to `models/orpheus-3b/orpheus_server.py` and spawns it. The server prints `PORT:<n>` to stdout when ready; the plugin reads that port and registers itself as a `TextToSpeech` provider. On stop, the subprocess is killed.
 
-### Setup
+**Setup:**
 
 ```text
 set_secret("HUGGINGFACE_TOKEN", "hf_...")
@@ -183,12 +251,12 @@ configure_plugin("orpheus_tts_3b", {"quantization": "int8", "voice": "tara"})
 toggle_plugin("orpheus_tts_3b", true)
 ```
 
-### Config
+**Config:**
 
-| Field          | Values                                               | Default |
-|----------------|------------------------------------------------------|---------|
-| `quantization` | none / int8 / int4                                   | int8    |
-| `voice`        | tara / dan / leah / zac / zoe / mia / julia / leo    | tara    |
+| Field | Values | Default |
+| ----- | ------ | ------- |
+| `quantization` | none / int8 / int4 | int8 |
+| `voice` | tara / dan / leah / zac / zoe / mia / julia / leo | tara |
 
 ---
 

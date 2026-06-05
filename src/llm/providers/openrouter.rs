@@ -64,7 +64,7 @@ impl OpenRouterProvider {
 #[async_trait]
 impl ProviderCaps for OpenRouterProvider {
     fn supported_types(&self) -> &'static [ModelType] {
-        &[ModelType::Llm, ModelType::Transcribe, ModelType::ImageGenerate]
+        &[ModelType::Llm, ModelType::Transcribe, ModelType::ImageGenerate, ModelType::Tts]
     }
 
     async fn list_models(&self) -> Result<Option<Vec<RemoteModelInfo>>> {

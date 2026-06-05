@@ -188,3 +188,4 @@ See [tts-providers.md](tts-providers.md) for the full manager API and DB schema.
 | `tailscale_remote` | `crates/plugin-tailscale-remote` | Remote access via Tailscale mesh |
 | `comfyui` | `crates/plugin-comfyui` | ComfyUI image generation workflows |
 | `orpheus_tts_3b` | `crates/plugin-tts-orpheus-3b` | Local TTS via Orpheus 3B (Python subprocess) |
+| `kokoro_tts` | `crates/plugin-tts-kokoro` | Local TTS via Kokoro ONNX (lightweight, multilingual) |

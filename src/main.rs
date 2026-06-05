@@ -48,8 +48,14 @@ use tts::TtsManager;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     std::fs::create_dir_all("logs")?;
     let file_appender = tracing_appender::rolling::daily("logs", format!("{APP_NAME}.log"));
     let (non_blocking, _log_guard) = tracing_appender::non_blocking(file_appender);
@@ -133,6 +139,7 @@ async fn main() -> Result<()> {
     plugin_manager.register(plugin_tailscale_remote::RemotePlugin::new());
     plugin_manager.register(plugin::ComfyUIPlugin::new());
     plugin_manager.register(plugin_tts_orpheus_3b::OrpheusTtsPlugin::new());
+    plugin_manager.register(plugin_tts_kokoro::KokoroTtsPlugin::new());
     info!("plugins registered");
     let plugin_manager = Arc::new(plugin_manager);
 
@@ -236,8 +243,9 @@ async fn main() -> Result<()> {
     );
 
     let chat_hub = chat_hub::ChatHub::new(Arc::clone(&pool), Arc::clone(&manager), Arc::clone(&approval));
-    // The "web" source is always present — register it at startup.
+    // Always-present sources registered at startup.
     chat_hub.register("web").await;
+    chat_hub.register("talk").await;
     cron.set_hub(Arc::clone(&chat_hub));
     info!("ChatHub initialised");
 

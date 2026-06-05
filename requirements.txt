@@ -4,6 +4,10 @@ google-api-python-client
 googlemaps
 requests
 
+# Kokoro ONNX TTS (plugin-tts-kokoro)
+kokoro-onnx
+soundfile
+
 # Orpheus TTS 3B (plugin-tts-orpheus-3b) — heavy deps, only needed when plugin is enabled
 torch
 transformers

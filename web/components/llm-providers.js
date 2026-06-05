@@ -2,32 +2,35 @@ import { html } from 'lit';
 import { LightElement } from '../lib/base.js';
 
 const PROVIDER_TYPE_LABELS = {
-  anthropic:  'Anthropic',
-  open_ai:    'OpenAI',
-  openrouter: 'OpenRouter',
-  deepseek:   'DeepSeek',
-  ollama:     'Ollama',
-  lm_studio:  'LM Studio',
+  anthropic:   'Anthropic',
+  open_ai:     'OpenAI',
+  openrouter:  'OpenRouter',
+  deepseek:    'DeepSeek',
+  ollama:      'Ollama',
+  lm_studio:   'LM Studio',
+  elevenlabs:  'ElevenLabs',
 };
 
 const PROVIDER_TYPES = Object.keys(PROVIDER_TYPE_LABELS);
 
 const TYPE_COLORS = {
-  anthropic:  '#d4a574',
-  open_ai:    '#10a37f',
-  openrouter: '#8b5cf6',
-  deepseek:   '#0ea5e9',
-  ollama:     '#f97316',
-  lm_studio:  '#6b7280',
+  anthropic:   '#d4a574',
+  open_ai:     '#10a37f',
+  openrouter:  '#8b5cf6',
+  deepseek:    '#0ea5e9',
+  ollama:      '#f97316',
+  lm_studio:   '#6b7280',
+  elevenlabs:  '#f59e0b',
 };
 
 const TYPE_ICONS = {
-  anthropic:  'bi-chat-square-dots',
-  open_ai:    'bi-lightning-charge',
-  openrouter: 'bi-hdd-stack',
-  deepseek:   'bi-search',
-  ollama:     'bi-terminal',
-  lm_studio:  'bi-window-stack',
+  anthropic:   'bi-chat-square-dots',
+  open_ai:     'bi-lightning-charge',
+  openrouter:  'bi-hdd-stack',
+  deepseek:    'bi-search',
+  ollama:      'bi-terminal',
+  lm_studio:   'bi-window-stack',
+  elevenlabs:  'bi-waveform',
 };
 
 function emptyForm() {

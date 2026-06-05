@@ -85,6 +85,7 @@ impl PluginManager {
             transcribe_registry:     Arc::clone(&state.transcribe_manager) as _,
             image_generate_registry: Arc::clone(&state.image_generator_manager) as _,
             tts_registry:            Arc::clone(&state.tts_manager) as _,
+            tts_provider:            Arc::clone(&state.tts_manager) as _,
             location:                Arc::clone(&state.location_manager) as _,
             event_bus:               Arc::clone(&state.event_bus),
             web_port:                state.web_port,

@@ -1,5 +1,6 @@
 pub mod anthropic;
 pub mod deepseek;
+pub mod elevenlabs;
 pub mod lm_studio;
 pub mod ollama;
 pub mod openai;
@@ -26,6 +27,8 @@ pub enum ModelType {
     Transcribe,
     /// Text-in / image-out generation models.
     ImageGenerate,
+    /// Text-in / audio-out speech synthesis models.
+    Tts,
 }
 
 // ── Common metadata ───────────────────────────────────────────────────────────
@@ -94,6 +97,7 @@ pub fn build_caps(record: &LlmProviderRecord) -> Result<Arc<dyn ProviderCaps>> {
                 .ok_or_else(|| anyhow!("DeepSeek provider '{}' has no API key configured", record.name))?;
             Arc::new(deepseek::DeepSeekProvider::new(api_key))
         }
+        LlmProvider::ElevenLabs => Arc::new(elevenlabs::ElevenLabsProvider),
     };
     Ok(caps)
 }

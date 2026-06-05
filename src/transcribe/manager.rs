@@ -22,6 +22,7 @@ use crate::config::LlmProvider;
 use crate::llm::LlmProviderRecord;
 use crate::llm::db as llm_db;
 
+use super::elevenlabs_audio::ElevenLabsTranscriber;
 use super::openai_audio::OpenAiAudioTranscriber;
 use super::{Transcribe, TranscribeModelInfo, TranscribeModelRecord};
 use super::db as transcribe_db;
@@ -249,6 +250,15 @@ fn build_transcriber(
             provider.api_key.clone()
                 .with_context(|| format!("provider '{}': api_key required for openrouter", provider.name))?,
         ),
+        LlmProvider::ElevenLabs => {
+            let api_key = provider.api_key.clone()
+                .with_context(|| format!("provider '{}': api_key required for elevenlabs", provider.name))?;
+            return Ok(Arc::new(ElevenLabsTranscriber::new(
+                &model.name,
+                api_key,
+                &model.model_id,
+            )));
+        }
         other => anyhow::bail!(
             "provider type '{:?}' does not support audio transcription", other
         ),

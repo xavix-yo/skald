@@ -3,12 +3,13 @@ use anyhow::Result;
 
 use super::{ModelType, ProviderCaps, RemoteModelInfo};
 
-pub struct OpenAiProvider;
+/// ElevenLabs supports TTS and Transcription only — no LLM chat/completion.
+pub struct ElevenLabsProvider;
 
 #[async_trait]
-impl ProviderCaps for OpenAiProvider {
+impl ProviderCaps for ElevenLabsProvider {
     fn supported_types(&self) -> &'static [ModelType] {
-        &[ModelType::Llm, ModelType::Transcribe, ModelType::Tts]
+        &[ModelType::Tts, ModelType::Transcribe]
     }
 
     async fn list_models(&self) -> Result<Option<Vec<RemoteModelInfo>>> {

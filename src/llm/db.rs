@@ -264,24 +264,26 @@ fn model_row_to_record(r: ModelRow) -> Result<LlmModelRecord> {
 
 pub fn provider_type_str(p: LlmProvider) -> &'static str {
     match p {
-        LlmProvider::LmStudio   => "lm_studio",
-        LlmProvider::Ollama     => "ollama",
-        LlmProvider::OpenAi     => "open_ai",
-        LlmProvider::OpenRouter => "openrouter",
-        LlmProvider::Anthropic  => "anthropic",
-        LlmProvider::DeepSeek   => "deepseek",
+        LlmProvider::LmStudio    => "lm_studio",
+        LlmProvider::Ollama      => "ollama",
+        LlmProvider::OpenAi      => "open_ai",
+        LlmProvider::OpenRouter  => "openrouter",
+        LlmProvider::Anthropic   => "anthropic",
+        LlmProvider::DeepSeek    => "deepseek",
+        LlmProvider::ElevenLabs  => "elevenlabs",
     }
 }
 
 fn parse_provider(s: &str) -> Result<LlmProvider> {
     match s {
-        "lm_studio"  => Ok(LlmProvider::LmStudio),
-        "ollama"     => Ok(LlmProvider::Ollama),
-        "open_ai"    => Ok(LlmProvider::OpenAi),
-        "openrouter" => Ok(LlmProvider::OpenRouter),
-        "anthropic"  => Ok(LlmProvider::Anthropic),
-        "deepseek"   => Ok(LlmProvider::DeepSeek),
-        other        => anyhow::bail!("unknown provider type '{other}'"),
+        "lm_studio"   => Ok(LlmProvider::LmStudio),
+        "ollama"      => Ok(LlmProvider::Ollama),
+        "open_ai"     => Ok(LlmProvider::OpenAi),
+        "openrouter"  => Ok(LlmProvider::OpenRouter),
+        "anthropic"   => Ok(LlmProvider::Anthropic),
+        "deepseek"    => Ok(LlmProvider::DeepSeek),
+        "elevenlabs"  => Ok(LlmProvider::ElevenLabs),
+        other         => anyhow::bail!("unknown provider type '{other}'"),
     }
 }
 

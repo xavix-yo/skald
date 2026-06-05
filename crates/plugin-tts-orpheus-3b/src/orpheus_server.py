@@ -53,6 +53,8 @@ if torch.cuda.is_available():
     device = "cuda"
 elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
+    # Some transformer ops are not yet implemented on MPS; fall back to CPU.
+    os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 else:
     device = "cpu"
 
@@ -88,7 +90,7 @@ def load_model(model_dir: str, quantization: str) -> None:
         print(f"[orpheus] quantization '{quantization}' not supported on {device}, running fp16", flush=True)
 
     model = AutoModelForCausalLM.from_pretrained(ORPHEUS_MODEL_ID, **load_kwargs)
-    if device == "cpu":
+    if device != "cuda":  # for cuda, device_map="auto" already handles placement
         model = model.to(device)
     model.eval()
 
