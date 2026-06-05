@@ -10,6 +10,12 @@ set -u
 
 cd "$(dirname "$0")"
 
+# ── Mode: -d for debug, otherwise release ─────────────────────────────────────
+MODE="release"
+if [ "${1:-}" = "-d" ]; then
+    MODE="debug"
+fi
+
 # ── Python venv setup (optional) ─────────────────────────────────────────────
 # Creates .venv/ and installs requirements.txt if Python is available.
 # If Python is not installed, the app starts normally but Python-based MCP
@@ -42,7 +48,11 @@ fi
 export TS_RS_EXPERIMENT=this_is_unstable_software
 
 while true; do
-    RUSTFLAGS="-A warnings" cargo run
+    if [ "$MODE" = "release" ]; then
+        RUSTFLAGS="-A warnings" cargo run --release
+    else
+        RUSTFLAGS="-A warnings" cargo run
+    fi
     code=$?
 
     if [ "$code" -eq 0 ]; then
