@@ -2,6 +2,7 @@ pub mod agents;
 pub mod approval;
 pub mod cron;
 pub mod dev;
+pub mod stats;
 pub mod files;
 pub mod image_generate_models;
 pub mod images;
@@ -77,6 +78,8 @@ pub fn router() -> Router<AppState> {
         // Dev / debug
         .route("/dev/debug_mode",               get(dev::get_debug_mode).post(dev::set_debug_mode).put(dev::set_debug_mode))
         .route("/dev/llm-requests",             get(dev::list_llm_requests))
+
+        .route("/stats/llm",                    get(stats::llm_stats))
         // TIC
         .route("/tic/trigger",                  post(tic_trigger))
         // Plugins

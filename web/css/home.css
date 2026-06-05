@@ -284,6 +284,90 @@ home-page {
   line-height: 1.4;
 }
 
+/* ── LLM Stats ─────────────────────────────────────────────────────────────── */
+
+.home-section-period {
+  font-weight: 400;
+  font-size: 0.75rem;
+  color: var(--bs-secondary-color);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 2px;
+}
+
+.home-stats-range {
+  display: flex;
+  gap: 2px;
+}
+
+.home-stats-range-btn {
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--bs-secondary-color);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.home-stats-range-btn:hover {
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+}
+
+.home-stats-range-btn.active {
+  background: var(--bs-primary);
+  border-color: var(--bs-primary);
+  color: #fff;
+}
+
+.home-stats-loading,
+.home-stats-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--bs-secondary-color);
+  padding: 1.5rem 0.5rem;
+  margin-bottom: 2rem;
+}
+
+.home-stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+.home-stat-card {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 10px;
+  padding: 0.9rem 1rem 0.75rem;
+  background: var(--bs-body-bg);
+}
+
+.home-stat-card-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--bs-secondary-color);
+  margin-bottom: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.home-stat-canvas-wrap {
+  position: relative;
+  height: 160px;
+}
+
+.home-stat-canvas-wrap canvas {
+  display: block;
+}
+
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 
 @media (max-width: 600px) {
@@ -313,6 +397,10 @@ home-page {
   .home-hero-status  { font-size: 0.78rem; }
 
   .home-guide {
+    grid-template-columns: 1fr;
+  }
+
+  .home-stats-grid {
     grid-template-columns: 1fr;
   }
 }
