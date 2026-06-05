@@ -162,6 +162,13 @@
   flex-shrink: 0;
 }
 
-.copilot-send-btn:hover       { background: #4f46e5; }
-.copilot-send-btn--stop       { background: #dc2626; }
-.copilot-send-btn--stop:hover { background: #b91c1c; }
+.copilot-send-btn:hover            { background: #4f46e5; }
+.copilot-send-btn--stop            { background: #dc2626; }
+.copilot-send-btn--stop:hover      { background: #b91c1c; }
+.copilot-send-btn--recording       { background: #dc2626; animation: copilot-pulse 1s ease-in-out infinite; }
+.copilot-send-btn--recording:hover { background: #b91c1c; }
+
+@keyframes copilot-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}

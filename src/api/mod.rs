@@ -11,6 +11,7 @@ pub mod llm;
 pub mod mcp;
 pub mod plugins;
 pub mod sessions;
+pub mod transcribe_audio;
 pub mod transcribe_models;
 pub mod tts_models;
 pub mod ws;
@@ -47,7 +48,9 @@ pub fn router() -> Router<AppState> {
         // LLM models
         .route("/llm/models",                   get(llm::list_models).post(llm::create_model))
         .route("/llm/models/{id}",              get(llm::get_model).put(llm::update_model).delete(llm::delete_model))
-        // Transcription models
+        // Transcription — audio upload + model CRUD
+        .route("/transcribe/audio",                    post(transcribe_audio::transcribe_audio))
+        .route("/transcribe/has",                      get(transcribe_audio::has_transcribe))
         .route("/transcribe/models",                   get(transcribe_models::list_models).post(transcribe_models::create_model))
         .route("/transcribe/models/{id}",              get(transcribe_models::get_model).put(transcribe_models::update_model).delete(transcribe_models::delete_model))
         .route("/transcribe/providers/{id}/models",    get(transcribe_models::provider_models))
