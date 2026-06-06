@@ -6,6 +6,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 pub use mcp_client::{
@@ -29,11 +30,11 @@ pub struct McpManager {
 }
 
 impl McpManager {
-    pub fn new(pool: Arc<SqlitePool>) -> Self {
+    pub fn new(pool: Arc<SqlitePool>, shutdown: CancellationToken) -> Self {
         let (notification_tx, notification_rx) = mpsc::unbounded_channel::<McpNotification>();
 
         let pool_bg = pool.clone();
-        tokio::spawn(Self::notification_consumer(pool_bg, notification_rx));
+        tokio::spawn(Self::notification_consumer(pool_bg, notification_rx, shutdown));
 
         Self {
             pool,
@@ -44,15 +45,27 @@ impl McpManager {
     }
 
     async fn notification_consumer(
-        pool: Arc<SqlitePool>,
-        mut rx: mpsc::UnboundedReceiver<McpNotification>,
+        pool:     Arc<SqlitePool>,
+        mut rx:   mpsc::UnboundedReceiver<McpNotification>,
+        shutdown: CancellationToken,
     ) {
-        while let Some((source, msg)) = rx.recv().await {
-            let method  = msg["method"].as_str().unwrap_or("unknown").to_string();
-            let payload = serde_json::to_string(&msg["params"]).unwrap_or_else(|_| "{}".to_string());
-            match crate::db::mcp_events::insert(&pool, &source, &method, &payload).await {
-                Ok(id) => info!("mcp_event stored: id={id} source={source} method={method}"),
-                Err(e) => warn!("mcp_events insert failed (source={source} method={method}): {e}"),
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => {
+                    info!("mcp: notification consumer shutdown");
+                    break;
+                }
+                msg = rx.recv() => match msg {
+                    Some((source, payload)) => {
+                        let method  = payload["method"].as_str().unwrap_or("unknown").to_string();
+                        let params  = serde_json::to_string(&payload["params"]).unwrap_or_else(|_| "{}".to_string());
+                        match crate::db::mcp_events::insert(&pool, &source, &method, &params).await {
+                            Ok(id) => info!("mcp_event stored: id={id} source={source} method={method}"),
+                            Err(e) => warn!("mcp_events insert failed (source={source} method={method}): {e}"),
+                        }
+                    }
+                    None => break,
+                }
             }
         }
     }

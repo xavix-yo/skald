@@ -158,12 +158,17 @@ On SIGINT, `main.rs` executes this sequence:
 
 Background tasks that respond to `shutdown_token.cancelled()`:
 
-- `CronTaskManager` scheduler loop and cleanup loop (`src/cron/mod.rs`)
-- `TicManager` timer loop (`src/tic/mod.rs`)
-- `PluginManager` config watcher (`src/plugin/mod.rs`)
-- LLM request log cleanup task (`src/main.rs`)
-
-The MCP notification consumer (`src/mcp/mod.rs`) is not directly cancelled; it stops naturally when `McpManager` is dropped (which closes the `mpsc::UnboundedSender`).
+| Task | Source |
+| --- | --- |
+| `CronTaskManager` scheduler loop | `src/cron/mod.rs` |
+| `CronTaskManager` cleanup loop | `src/cron/mod.rs` |
+| `TicManager` timer loop | `src/tic/mod.rs` |
+| `PluginManager` config watcher | `src/plugin/mod.rs` |
+| LLM request log cleanup | `src/main.rs` |
+| `McpManager` notification consumer | `src/mcp/mod.rs` |
+| `ChatHub` notification consumer | `src/chat_hub/mod.rs` |
+| `TtsManager` API provider reload watcher | `src/tts/manager.rs` |
+| `TranscribeManager` API provider reload watcher | `src/transcribe/manager.rs` |
 
 ---
 

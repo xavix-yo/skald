@@ -4,6 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 use tokio::sync::{broadcast, mpsc};
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use crate::approval::ApprovalManager;
@@ -47,6 +48,7 @@ impl ChatHub {
         db:          Arc<SqlitePool>,
         session_mgr: Arc<ChatSessionManager>,
         approval:    Arc<ApprovalManager>,
+        shutdown:    CancellationToken,
     ) -> Arc<Self> {
         let (notify_tx, notify_rx) = mpsc::channel::<String>(NOTIFY_CAPACITY);
         let (global_tx, _)         = broadcast::channel::<GlobalEvent>(EVENTS_CAPACITY);
@@ -61,7 +63,7 @@ impl ChatHub {
 
         // Spawn the background consumer with a Weak reference so it doesn't
         // prevent ChatHub from being dropped on shutdown.
-        tokio::spawn(Self::notification_consumer(Arc::downgrade(&hub), notify_rx));
+        tokio::spawn(Self::notification_consumer(Arc::downgrade(&hub), notify_rx, shutdown));
 
         hub
     }
@@ -281,14 +283,20 @@ impl ChatHub {
     /// Serialisation with active LLM turns is free: `ChatSessionHandler::handle_message`
     /// holds `processing: Mutex<()>` for the duration of a turn, so `send_message`
     /// below blocks naturally until the turn completes.
-    async fn notification_consumer(hub: Weak<Self>, mut rx: mpsc::Receiver<String>) {
+    async fn notification_consumer(hub: Weak<Self>, mut rx: mpsc::Receiver<String>, shutdown: CancellationToken) {
         info!("ChatHub: notification consumer started");
 
         loop {
-            // Block until at least one notification arrives.
-            let first = match rx.recv().await {
-                Some(b) => b,
-                None    => break, // notify_tx dropped — ChatHub is shutting down
+            // Block until at least one notification arrives (or shutdown signal).
+            let first = tokio::select! {
+                _ = shutdown.cancelled() => {
+                    info!("ChatHub: notification consumer shutdown");
+                    break;
+                }
+                msg = rx.recv() => match msg {
+                    Some(b) => b,
+                    None    => break, // notify_tx dropped — ChatHub is shutting down
+                }
             };
 
             // Brief window to let burst notifications accumulate before dispatching.

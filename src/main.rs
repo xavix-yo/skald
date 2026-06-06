@@ -179,7 +179,7 @@ async fn async_main() -> Result<()> {
     let secrets = SecretsStore::new(Arc::clone(&pool));
     info!("secrets store ready");
 
-    let mcp = Arc::new(mcp::McpManager::new(Arc::clone(&pool)));
+    let mcp = Arc::new(mcp::McpManager::new(Arc::clone(&pool), shutdown_token.clone()));
     let mcp_init = Arc::clone(&mcp);
     tokio::spawn(async move { mcp_init.initialize().await; });
 
@@ -295,19 +295,19 @@ async fn async_main() -> Result<()> {
     let cron_handles = Arc::clone(&cron).start(shutdown_token.clone());
     info!("cron scheduler started");
 
-    let transcribe_manager = TranscribeManager::new(Arc::clone(&pool), Arc::clone(&provider_registry), Arc::clone(&system_bus)).await?;
+    let transcribe_manager = TranscribeManager::new(Arc::clone(&pool), Arc::clone(&provider_registry), Arc::clone(&system_bus), shutdown_token.clone()).await?;
     info!(
         db_backed = transcribe_manager.list_models_info().await.len(),
         "transcribe manager ready",
     );
 
-    let tts_manager = TtsManager::new(Arc::clone(&pool), Arc::clone(&provider_registry), Arc::clone(&system_bus)).await?;
+    let tts_manager = TtsManager::new(Arc::clone(&pool), Arc::clone(&provider_registry), Arc::clone(&system_bus), shutdown_token.clone()).await?;
     info!(
         db_backed = tts_manager.list_models_info().await.len(),
         "tts manager ready",
     );
 
-    let chat_hub = chat_hub::ChatHub::new(Arc::clone(&pool), Arc::clone(&manager), Arc::clone(&approval));
+    let chat_hub = chat_hub::ChatHub::new(Arc::clone(&pool), Arc::clone(&manager), Arc::clone(&approval), shutdown_token.clone());
     // Always-present sources registered at startup.
     chat_hub.register("web").await;
     chat_hub.register("talk").await;

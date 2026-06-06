@@ -14,6 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use sqlx::SqlitePool;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use core_api::system_bus::{SystemEvent, SystemEventBus};
@@ -58,6 +59,7 @@ impl TranscribeManager {
         pool:       Arc<SqlitePool>,
         registry:   Arc<ProviderRegistry>,
         system_bus: Arc<SystemEventBus>,
+        shutdown:   CancellationToken,
     ) -> Result<Arc<Self>> {
         let mgr = Arc::new(Self {
             pool,
@@ -74,15 +76,21 @@ impl TranscribeManager {
         let mut rx = system_bus.subscribe();
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(SystemEvent::ApiProviderRegistered { .. } | SystemEvent::ApiProviderUnregistered { .. }) => {
-                        match weak.upgrade() {
-                            Some(m) => { if let Err(e) = m.reload().await { warn!(error = %e, "transcribe_manager: reload failed"); } }
-                            None    => break,
-                        }
+                tokio::select! {
+                    _ = shutdown.cancelled() => {
+                        info!("transcribe_manager: reload watcher shutdown");
+                        break;
                     }
-                    Err(core_api::system_bus::RecvError::Lagged(n)) => warn!(n, "transcribe_manager: system_bus lagged"),
-                    Err(core_api::system_bus::RecvError::Closed)    => break,
+                    event = rx.recv() => match event {
+                        Ok(SystemEvent::ApiProviderRegistered { .. } | SystemEvent::ApiProviderUnregistered { .. }) => {
+                            match weak.upgrade() {
+                                Some(m) => { if let Err(e) = m.reload().await { warn!(error = %e, "transcribe_manager: reload failed"); } }
+                                None    => break,
+                            }
+                        }
+                        Err(core_api::system_bus::RecvError::Lagged(n)) => warn!(n, "transcribe_manager: system_bus lagged"),
+                        Err(core_api::system_bus::RecvError::Closed)    => break,
+                    }
                 }
             }
         });
