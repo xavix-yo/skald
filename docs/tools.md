@@ -98,7 +98,7 @@ All tools are registered in `src/main.rs` before `ChatSessionManager` is built.
   - **Interactive sessions** (web, Telegram): available to sub-agents only (`depth ≥ 1`); emits `ServerEvent::AgentQuestion`, waits inline
   - **Background sessions** (cron, tic): available at root level (`!is_interactive`); registers with `ClarificationManager`, visible in Agent Inbox; agent suspends until answered
 - `show_mcp_tools` — activates MCP servers for the session (lazy loading); injected as an `InterfaceTool` in `build_agent_config` with per-session state; not available to sub-agents
-- `notify` — queues a notification briefing to the home conversation via `ChatHub`; **injected as an `InterfaceTool` by the caller** (`TicManager` for TIC, `CronTaskManager` for the worker agent); not in ToolRegistry so ordinary agents cannot call it
+- `notify` — queues a notification briefing to the home conversation via `ChatHub`; **injected as an `InterfaceTool` by the caller** (`TicManager` for TIC, `TaskManager` for the worker agent); not in ToolRegistry so ordinary agents cannot call it
 
 **Also not in ToolRegistry:**
 

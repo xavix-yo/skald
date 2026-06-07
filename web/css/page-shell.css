@@ -1,6 +1,6 @@
 /* ── Custom element display + layout shell ──────────────────────────────────── */
 
-cron-jobs-page {
+tasks-page {
   display: none; /* toggled by JS */
   flex: 1;
   min-width: 0;

@@ -248,9 +248,10 @@ See [tts-providers.md](tts-providers.md).
 | `next_run_at` | TEXT | nullable (RFC3339); pre-computed next fire time; used by `list_due()` (added via ALTER) |
 | `single_run` | INTEGER | NOT NULL DEFAULT 0; if 1 the job is disabled after its first execution (added via ALTER) |
 | `running_session_id` | INTEGER | nullable; non-null while a run is in-flight; cleared by `finish_run()`; used by `list_interrupted()` for restart recovery (added via ALTER) |
+| `kind` | TEXT | NOT NULL DEFAULT `'cron'` — `'cron'` for scheduled jobs, `'immediate'` for one-shot tasks that run immediately on creation |
 | `created_at` | TEXT | NOT NULL |
 
-**`next_run_at`** is set at job creation (first upcoming fire time after now), advanced after each successful run, cleared on disable, and recalculated by `toggle_cron_job` when re-enabling. `list_due(pool, now)` queries `WHERE enabled=1 AND next_run_at <= now AND running_session_id IS NULL`.
+**`next_run_at`** is set at job creation (first upcoming fire time after now), advanced after each successful run, cleared on disable, and recalculated by `toggle_cron_job` when re-enabling. `list_due(pool, now)` queries `WHERE kind='cron' AND enabled=1 AND next_run_at <= now AND running_session_id IS NULL`. Immediate tasks (`kind='immediate'`) are never picked up by the scheduler — they run immediately on creation.
 
 **`running_session_id`** is set by `set_running()` before `handle_message()` starts and cleared by `finish_run()` after the run completes. At startup, `recover_interrupted()` queries `list_interrupted()` and re-spawns any jobs still in-flight from a crash.
 
@@ -258,7 +259,7 @@ See [tts-providers.md](tts-providers.md).
 
 ### job_runs
 
-Audit trail of every cron job execution. One row per run, written after each execution by `CronTaskManager::run_job()`.
+Audit trail of every cron job and immediate task execution. One row per run, written after each execution by `TaskManager::run_job()`.
 
 | Column | Type | Constraints |
 | --- | --- | --- |
@@ -451,6 +452,8 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
 | ------- | ------ |
 | 1 | Initial (no-op bump — establishes versioning) |
 | 2 | `tts_models`: added `voice_id TEXT` (speaker voice, separate from generation model) |
+| 3 | `llm_requests`: added `cache_read_tokens` and `cache_creation_tokens` INTEGER |
+| 4 | `scheduled_jobs`: added `kind TEXT NOT NULL DEFAULT 'cron'` to distinguish cron jobs from immediate tasks |
 
 ---
 

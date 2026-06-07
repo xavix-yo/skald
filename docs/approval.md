@@ -167,7 +167,7 @@ Each entry contains:
 | `context_label` | Option\<String\> | Human-readable origin label (e.g. `"CronJob: Daily Digest"`); used in Agent Inbox to identify context |
 | `created_at` | String | ISO-8601 timestamp |
 
-`context_label` is set by `ChatSessionHandler::set_context_label()` before the run (e.g. `CronTaskManager` sets `"CronJob: <title>"`). It is read in `llm_loop.rs` and `resume.rs` and passed to `approval.register()`.
+`context_label` is set by `ChatSessionHandler::set_context_label()` before the run (e.g. `TaskManager` sets `"CronJob: <title>"`). It is read in `llm_loop.rs` and `resume.rs` and passed to `approval.register()`.
 
 ---
 

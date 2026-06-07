@@ -17,7 +17,7 @@ use super::chat_hub::ChatHub;
 use super::clarification::ClarificationManager;
 use super::inbox::Inbox;
 use super::compactor::ContextCompactor;
-use super::cron::CronTaskManager;
+use super::cron::TaskManager;
 use super::image_generate::ImageGeneratorManager;
 use super::llm::LlmManager;
 use super::location::LocationManager;
@@ -43,7 +43,7 @@ pub struct Skald {
     pub llm_manager:             Arc<LlmManager>,
     pub secrets:                 Arc<SecretsStore>,
     pub mcp:                     Arc<McpManager>,
-    pub cron:                    Arc<CronTaskManager>,
+    pub cron:                    Arc<TaskManager>,
     pub plugin_manager:          Arc<PluginManager>,
     pub tools:                   Arc<ToolRegistry>,
     pub approval:                Arc<ApprovalManager>,
@@ -165,7 +165,7 @@ impl Skald {
         let mcp_init = Arc::clone(&mcp);
         tokio::spawn(async move { mcp_init.initialize().await; });
 
-        // CronTaskManager is created before ToolRegistry so cron tools can
+        // TaskManager is created before ToolRegistry so cron tools can
         // be registered before ChatSessionManager is built.
         let cron_tz = config.timezone.as_deref().and_then(|s| {
             match s.parse::<chrono_tz::Tz>() {
@@ -173,7 +173,7 @@ impl Skald {
                 Err(_)  => { warn!("timezone: unknown value '{s}', falling back to local time"); None }
             }
         });
-        let cron = CronTaskManager::new(Arc::clone(&pool), cron_tz);
+        let cron = TaskManager::new(Arc::clone(&pool), cron_tz);
 
         // Build PluginManager — plugins are injected by the caller (main.rs).
         // start_enabled() is called later by WebFrontend, after the router factory is wired.

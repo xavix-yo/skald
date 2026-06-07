@@ -14,7 +14,7 @@ use crate::core::chat_hub::ChatHub;
 use crate::core::db::scheduled_jobs::{self, ScheduledJob};
 use crate::core::session::manager::ChatSessionManager;
 
-pub struct CronTaskManager {
+pub struct TaskManager {
     pool:    Arc<SqlitePool>,
     tz:      Option<Tz>,
     session: std::sync::OnceLock<Arc<ChatSessionManager>>,
@@ -40,7 +40,7 @@ fn next_fire(schedule: &Schedule, tz: Option<Tz>) -> Option<DateTime<Utc>> {
     next_fire_and_single(schedule, tz).map(|(dt, _)| dt)
 }
 
-impl CronTaskManager {
+impl TaskManager {
     pub fn new(pool: Arc<SqlitePool>, tz: Option<Tz>) -> Arc<Self> {
         Arc::new(Self {
             pool,
@@ -163,25 +163,46 @@ impl CronTaskManager {
         prompt:      &str,
         agent_id:    &str,
         single_run:  bool,
+        kind:        &str,
     ) -> Result<ScheduledJob> {
-        let schedule = Schedule::from_str(cron).map_err(|_| {
-            anyhow::anyhow!(
-                "Invalid cron expression: '{cron}'. Use 7-field format: \
-                 sec min hour dom month dow year  (e.g. '0 0 9 * * * *' = every day at 9:00)"
-            )
-        })?;
-        let (first_fire, is_single) = next_fire_and_single(&schedule, self.tz)
-            .ok_or_else(|| anyhow::anyhow!("Cron expression '{cron}' has no upcoming fire times"))?;
-        // Auto-detect one-shot expressions: if the schedule can only ever fire once,
-        // set single_run regardless of what the caller passed.
-        let single_run = single_run || is_single;
-        let next_run_at = first_fire.to_rfc3339();
-        tokio::task::block_in_place(|| {
+        let (first_fire, _is_single, single_run) = if kind == "immediate" {
+            (None, true, true)
+        } else {
+            let schedule = Schedule::from_str(cron).map_err(|_| {
+                anyhow::anyhow!(
+                    "Invalid cron expression: '{cron}'. Use 7-field format: \
+                     sec min hour dom month dow year  (e.g. '0 0 9 * * * *' = every day at 9:00)"
+                )
+            })?;
+            let (first, single) = next_fire_and_single(&schedule, self.tz)
+                .ok_or_else(|| anyhow::anyhow!("Cron expression '{cron}' has no upcoming fire times"))?;
+            let single_run = single_run || single;
+            (Some(first.to_rfc3339()), single, single_run)
+        };
+        let next_run_at: Option<&str> = first_fire.as_deref();
+        let job = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(scheduled_jobs::create(
                 &self.pool, title, description, cron, prompt, agent_id,
-                single_run, &next_run_at,
+                single_run, next_run_at, kind,
             ))
-        })
+        })?;
+
+        if kind == "immediate" {
+            let pool    = Arc::clone(&self.pool);
+            let session = self.session()?.clone();
+            let hub     = self.hub.get().cloned();
+            let tz      = self.tz;
+            let job_run = job.clone();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    if let Err(e) = run_job(&pool, &session, hub.as_ref(), &job_run, tz).await {
+                        tracing::error!("immediate task {} ('{}') failed: {e}", job_run.id, job_run.title);
+                    }
+                });
+            });
+        }
+
+        Ok(job)
     }
 
     pub fn delete_job(&self, id: i64) -> Result<bool> {

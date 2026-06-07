@@ -15,6 +15,7 @@ pub struct ScheduledJob {
     pub next_run_at:        Option<String>,
     pub single_run:         bool,
     pub running_session_id: Option<i64>,
+    pub kind:               String,
     pub created_at:         String,
 }
 
@@ -25,6 +26,7 @@ const SELECT: &str =
             next_run_at,
             CAST(single_run AS BOOLEAN) AS single_run,
             running_session_id,
+            kind,
             created_at
      FROM scheduled_jobs";
 
@@ -40,7 +42,8 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<ScheduledJob>> {
 pub async fn list_due(pool: &SqlitePool, now_rfc3339: &str) -> Result<Vec<ScheduledJob>> {
     let rows = sqlx::query_as::<_, ScheduledJob>(sqlx::AssertSqlSafe(format!(
         "{SELECT}
-         WHERE enabled = 1
+         WHERE kind = 'cron'
+           AND enabled = 1
            AND next_run_at IS NOT NULL
            AND next_run_at <= ?
            AND running_session_id IS NULL
@@ -70,11 +73,12 @@ pub async fn create(
     prompt:      &str,
     agent_id:    &str,
     single_run:  bool,
-    next_run_at: &str,
+    next_run_at: Option<&str>,
+    kind:        &str,
 ) -> Result<ScheduledJob> {
     let id = sqlx::query(
-        "INSERT INTO scheduled_jobs (title, description, cron, prompt, agent_id, single_run, next_run_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO scheduled_jobs (title, description, cron, prompt, agent_id, single_run, next_run_at, kind)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(title)
     .bind(description)
@@ -83,6 +87,7 @@ pub async fn create(
     .bind(agent_id)
     .bind(single_run as i64)
     .bind(next_run_at)
+    .bind(kind)
     .execute(pool)
     .await?
     .last_insert_rowid();

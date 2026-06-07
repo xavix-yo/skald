@@ -65,7 +65,7 @@ export class AppSidebar extends LightElement {
     const hash = location.hash.slice(1);
     if (!hash) return 'home';
     const segment = hash.split('/')[0];
-    return ['inbox', 'cron', 'models', 'providers', 'approval', 'agents', 'llm-requests'].includes(segment) ? segment : 'home';
+    return ['inbox', 'tasks', 'models', 'providers', 'approval', 'agents', 'llm-requests'].includes(segment) ? segment : 'home';
   }
 
   _applyPage(page) {
@@ -117,10 +117,10 @@ export class AppSidebar extends LightElement {
               : ''}
           </span>
         </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'cron' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('cron', e)}>
-          <i class="bi bi-clock"></i>
-          <span class="sidebar-link-name">Cron Jobs</span>
+        <a href="#" class="sidebar-link ${this._activePage === 'tasks' ? 'active' : ''}"
+           @click=${(e) => this._togglePage('tasks', e)}>
+          <i class="bi bi-lightning-charge"></i>
+          <span class="sidebar-link-name">Tasks</span>
         </a>
         <a href="#" class="sidebar-link ${this._activePage === 'models' ? 'active' : ''}"
            @click=${(e) => this._togglePage('models', e)}>

@@ -32,8 +32,8 @@ Plugin instances are constructed in `main.rs` as `Vec<Arc<dyn Plugin>>` and inje
 | `SqlitePool` | `db::init_pool()` | `Arc<SqlitePool>` | — |
 | `LlmManager` | `LlmManager::new()` | `Arc<LlmManager>` | `SqlitePool` |
 | `McpManager` | `McpManager::new()` | `Arc<McpManager>` | `SqlitePool` |
-| `CronTaskManager` | `CronTaskManager::new()` | `Arc<CronTaskManager>` | `SqlitePool`, `ChatSessionManager` (via OnceLock), `ChatHub` (via OnceLock) |
-| `ToolRegistry` | `Skald::new()` inline | `Arc<ToolRegistry>` | `McpManager`, `CronTaskManager`, `PluginManager` |
+| `TaskManager` | `TaskManager::new()` | `Arc<TaskManager>` | `SqlitePool`, `ChatSessionManager` (via OnceLock), `ChatHub` (via OnceLock) |
+| `ToolRegistry` | `Skald::new()` inline | `Arc<ToolRegistry>` | `McpManager`, `TaskManager`, `PluginManager` |
 | `ApprovalManager` | `ApprovalManager::new()` | `Arc<ApprovalManager>` | `SqlitePool` |
 | `ClarificationManager` | `ClarificationManager::new()` | `Arc<ClarificationManager>` | — |
 | `Inbox` | `Inbox::new()` | (owned by Skald) | `ApprovalManager`, `ClarificationManager`, `ChatHub` |
@@ -48,9 +48,9 @@ Plugin instances are constructed in `main.rs` as `Vec<Arc<dyn Plugin>>` and inje
 
 ### Circular Dependencies
 
-**`CronTaskManager` ↔ `ChatSessionManager`**: `CronTaskManager` needs `ChatSessionManager` to dispatch jobs, but `ChatSessionManager` is built after `ToolRegistry` which holds `Arc<CronTaskManager>`. Broken with `std::sync::OnceLock`: `CronTaskManager` is created first, `set_session()` is called after `ChatSessionManager` exists.
+**`TaskManager` ↔ `ChatSessionManager`**: `TaskManager` needs `ChatSessionManager` to dispatch jobs, but `ChatSessionManager` is built after `ToolRegistry` which holds `Arc<TaskManager>`. Broken with `std::sync::OnceLock`: `TaskManager` is created first, `set_session()` is called after `ChatSessionManager` exists.
 
-**`CronTaskManager` ↔ `ChatHub`**: Same pattern — `ChatHub` is built after `cron.start()`. `set_hub()` is called immediately after `ChatHub::new()`. The cron tick loop starts 30 s after `start()`, so hub is always ready by the first real job dispatch.
+**`TaskManager` ↔ `ChatHub`**: Same pattern — `ChatHub` is built after `cron.start()`. `set_hub()` is called immediately after `ChatHub::new()`. The cron tick loop starts 30 s after `start()`, so hub is always ready by the first real job dispatch.
 
 **`PluginManager` ↔ `Skald`**: `PluginManager` is constructed early (to register tools), then `set_skald(Arc<Skald>)` is called after `Arc::new(Skald { … })`. `set_router_factory(RouterFactory)` is called by `WebFrontend::start()` before `start_enabled()`.
 
@@ -76,7 +76,7 @@ Plugin instances are constructed in `main.rs` as `Vec<Arc<dyn Plugin>>` and inje
 6. Spawn LLM request log cleanup task (if configured)
 7. `SecretsStore::new()`
 8. `McpManager::new()` + background `initialize()` — connects MCP servers from DB
-9. `CronTaskManager::new()` — creates scheduler (not started yet)
+9. `TaskManager::new()` — creates scheduler (not started yet)
 10. `PluginManager::new()` — plugins registered, not yet started
 11. `ToolRegistry` built — all built-in tools registered
 12. `ApprovalManager::new()` — loads approval rules from DB; seeds defaults
@@ -86,10 +86,10 @@ Plugin instances are constructed in `main.rs` as `Vec<Arc<dyn Plugin>>` and inje
 16. `ContextCompactor::new()` (if `llm.compaction` configured)
 17. `ClarificationManager::new()`
 18. `ChatSessionManager::new()` — session factory wired up
-19. `cron.set_session()` — breaks CronTaskManager circular dep
+19. `cron.set_session()` — breaks TaskManager circular dep
 20. `TranscribeManager::new()`, `TtsManager::new()`
 21. `ChatHub::new()` — spawns notification consumer task
-22. `cron.set_hub(chat_hub)` — wires ChatHub into CronTaskManager
+22. `cron.set_hub(chat_hub)` — wires ChatHub into TaskManager
 23. `Inbox::new(approval, clarification, chat_hub)` — unified pending-requests façade
 24. `ToolCatalog::new(tools, mcp)` — unified tool listing façade
 25. `cron.start(shutdown_token)` + `tic_manager.start(shutdown_token)` — background loops begin; handles stored in `bg_handles`
@@ -163,7 +163,7 @@ MCP server stdout (JSON-RPC notification, no id field)
 | `llm_manager` | `Arc<LlmManager>` | LLM selection, health tracking |
 | `secrets` | `Arc<SecretsStore>` | Centralised token/key store |
 | `mcp` | `Arc<McpManager>` | MCP server management |
-| `cron` | `Arc<CronTaskManager>` | Scheduled job management |
+| `cron` | `Arc<TaskManager>` | Scheduled job and immediate task management |
 | `plugin_manager` | `Arc<PluginManager>` | Plugin lifecycle |
 | `tools` | `Arc<ToolRegistry>` | Built-in tool dispatch |
 | `approval` | `Arc<ApprovalManager>` | Human-in-the-loop approval rules |
@@ -198,8 +198,8 @@ Background tasks that respond to `shutdown_token.cancelled()`:
 
 | Task | Source |
 | --- | --- |
-| `CronTaskManager` scheduler loop | `src/core/cron/mod.rs` |
-| `CronTaskManager` cleanup loop | `src/core/cron/mod.rs` |
+| `TaskManager` scheduler loop | `src/core/cron/mod.rs` |
+| `TaskManager` cleanup loop | `src/core/cron/mod.rs` |
 | `TicManager` timer loop | `src/core/tic/mod.rs` |
 | `PluginManager` config watcher | `src/core/plugin/mod.rs` |
 | LLM request log cleanup | `src/core/skald.rs` |

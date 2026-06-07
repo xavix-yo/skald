@@ -3,20 +3,20 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::core::cron::CronTaskManager;
+use crate::core::cron::TaskManager;
 use crate::core::tools::Tool;
 
 // ── list_cron_jobs ────────────────────────────────────────────────────────────
 
-pub struct ListCronJobs(pub Arc<CronTaskManager>);
+pub struct ListCronJobs(pub Arc<TaskManager>);
 
 impl Tool for ListCronJobs {
     fn name(&self) -> &str { "list_cron_jobs" }
     fn category(&self) -> crate::core::tools::ToolCategory { crate::core::tools::ToolCategory::Introspection }
 
     fn description(&self) -> &str {
-        "List all scheduled cron jobs. Returns id, title, description, cron expression, \
-         agent_id, enabled status, single_run flag, last_run_at, and next_run_at for each job."
+        "List all scheduled cron jobs and immediate tasks. Returns id, title, description, cron expression, \
+         agent_id, enabled status, single_run flag, kind (cron or immediate), last_run_at, and next_run_at for each."
     }
 
     fn parameters_schema(&self) -> Value {
@@ -36,6 +36,7 @@ impl Tool for ListCronJobs {
             "agent_id":    j.agent_id,
             "enabled":     j.enabled,
             "single_run":  j.single_run,
+            "kind":        j.kind,
             "last_run_at": j.last_run_at,
             "next_run_at": j.next_run_at,
             "created_at":  j.created_at,
@@ -46,7 +47,7 @@ impl Tool for ListCronJobs {
 
 // ── add_cron_job ──────────────────────────────────────────────────────────────
 
-pub struct AddCronJob(pub Arc<CronTaskManager>);
+pub struct AddCronJob(pub Arc<TaskManager>);
 
 impl Tool for AddCronJob {
     fn name(&self) -> &str { "add_cron_job" }
@@ -90,7 +91,7 @@ impl Tool for AddCronJob {
         if cron.is_empty()   { anyhow::bail!("cron is required"); }
         if prompt.is_empty() { anyhow::bail!("prompt is required"); }
 
-        let job = self.0.add_job(&title, &description, &cron, &prompt, &agent_id, single_run)?;
+        let job = self.0.add_job(&title, &description, &cron, &prompt, &agent_id, single_run, "cron")?;
         let kind = if job.single_run { "one-shot" } else { "recurring" };
         Ok(format!(
             "Created {} cron job {} — '{}' (next run: {})",
@@ -102,7 +103,7 @@ impl Tool for AddCronJob {
 
 // ── delete_cron_job ───────────────────────────────────────────────────────────
 
-pub struct DeleteCronJob(pub Arc<CronTaskManager>);
+pub struct DeleteCronJob(pub Arc<TaskManager>);
 
 impl Tool for DeleteCronJob {
     fn name(&self) -> &str { "delete_cron_job" }
@@ -134,7 +135,7 @@ impl Tool for DeleteCronJob {
 
 // ── toggle_cron_job ───────────────────────────────────────────────────────────
 
-pub struct ToggleCronJob(pub Arc<CronTaskManager>);
+pub struct ToggleCronJob(pub Arc<TaskManager>);
 
 impl Tool for ToggleCronJob {
     fn name(&self) -> &str { "toggle_cron_job" }

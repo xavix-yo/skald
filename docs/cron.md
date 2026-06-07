@@ -1,8 +1,8 @@
-# Cron Jobs
+# Cron Jobs & Immediate Tasks
 
-## CronTaskManager
+## TaskManager
 
-`CronTaskManager` uses `std::sync::OnceLock` to hold two late-injected dependencies, breaking circular chains that would arise if they were required at construction time:
+`TaskManager` (formerly `CronTaskManager`) manages both scheduled cron jobs and immediate (one-shot) tasks. It uses `std::sync::OnceLock` to hold two late-injected dependencies, breaking circular chains that would arise if they were required at construction time:
 
 | Dependency | Injected via | Needed for |
 |---|---|---|
@@ -10,7 +10,7 @@
 | `ChatHub` | `set_hub()` | Sending completion/failure notifications |
 
 In `main.rs`:
-1. `CronTaskManager::new(pool)` — created first, OnceLocks empty
+1. `TaskManager::new(pool)` — created first, OnceLocks empty
 2. `ChatSessionManager::new(...)` — created second
 3. `cron.set_session(Arc::clone(&manager))` — fills first OnceLock
 4. `cron.start()` — background tasks begin (tick every 30 s)
@@ -71,7 +71,7 @@ Examples:
 
 Cron expressions are evaluated in the timezone configured under `timezone` in `config.yml` (top-level IANA name, e.g. `Europe/Rome`). When omitted, the server's system local timezone is used as fallback. The same setting also controls the timestamp injected into the LLM context each turn.
 
-The timezone is loaded at startup, logged at `INFO` level, and passed into `CronTaskManager`. All three points where `next_run_at` is computed (`add_job`, `toggle_job`, `run_job`) use the same `next_fire(schedule, tz)` helper which converts the result to UTC before storing.
+The timezone is loaded at startup, logged at `INFO` level, and passed into `TaskManager`. All three points where `next_run_at` is computed (`add_job`, `toggle_job`, `run_job`) use the same `next_fire(schedule, tz)` helper which converts the result to UTC before storing.
 
 ---
 
@@ -117,6 +117,21 @@ This means: a tick simply does `WHERE next_run_at <= now` — no expression eval
 
 ---
 
+## `kind` Column (cron vs immediate)
+
+`scheduled_jobs` has a `kind` column with two values:
+
+| `kind` | Behavior |
+|--------|----------|
+| `cron` | Scheduled job with a cron expression. Picked up by the tick loop when `next_run_at` is due. |
+| `immediate` | Runs immediately on creation. No cron expression, no `next_run_at`. `single_run` is always true. Spawned in background via `add_job(kind="immediate")`. |
+
+Immediate tasks are useful for fire-and-forget background work. The caller receives the task ID and can monitor completion via the `job_runs` audit trail and ChatHub notifications.
+
+The `list_due()` query filters by `kind = 'cron'`, so immediate tasks are never picked up by the scheduler tick loop. Recovery (`list_interrupted()`) applies to both kinds.
+
+---
+
 ## `single_run` (one-shot jobs)
 
 If `single_run=true`, after the first execution `finish_run()` receives `next_run_at=None`, which sets `enabled=0` (disabling the job) rather than advancing the schedule. The job stays in the DB as a disabled record and is purged after 7 days by the cleanup loop.
@@ -153,7 +168,7 @@ Jobs run via the `worker` agent by default (see [agents.md](agents.md)). The wor
 
 ## Completion Notifications
 
-After every run, `CronTaskManager` calls `hub.notify(briefing)`, which routes the message through `ChatHub`'s notification consumer to the home conversation. The briefing includes job title, status, and the agent's final response.
+After every run, `TaskManager` calls `hub.notify(briefing)`, which routes the message through `ChatHub`'s notification consumer to the home conversation. The briefing includes job title, status, and the agent's final response.
 
 ---
 
@@ -167,8 +182,8 @@ Every execution is recorded in `db::job_runs`. Schema: see [database.md](databas
 
 | Tool | Action |
 |---|---|
-| `list_cron_jobs` | Returns JSON array of all jobs (id, title, cron, enabled, next_run_at, single_run, last_run_at) |
-| `add_cron_job` | Creates a new job; validates cron expression; computes next_run_at in the configured timezone; auto-detects single_run for one-fire expressions |
+| `list_cron_jobs` | Returns JSON array of all tasks (id, title, cron, enabled, kind, next_run_at, single_run, last_run_at) |
+| `add_cron_job` | Creates a new cron job; validates cron expression; computes next_run_at in the configured timezone; auto-detects single_run for one-fire expressions |
 | `delete_cron_job` | Permanently deletes job by id |
 | `toggle_cron_job` | Enables or disables a job; recalculates next_run_at when re-enabling |
 

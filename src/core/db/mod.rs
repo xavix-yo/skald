@@ -179,6 +179,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
             next_run_at        TEXT,
             single_run         INTEGER NOT NULL DEFAULT 0,
             running_session_id INTEGER,
+            kind               TEXT    NOT NULL DEFAULT 'cron',
             created_at         TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
@@ -466,6 +467,21 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO config(key, value, updated_at)
              VALUES('schema_version', '3', datetime('now'))",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    if version < 4 {
+        sqlx::query(
+            "ALTER TABLE scheduled_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'cron'",
+        )
+        .execute(pool)
+        .await
+        .ok();
+        sqlx::query(
+            "INSERT OR REPLACE INTO config(key, value, updated_at)
+             VALUES('schema_version', '4', datetime('now'))",
         )
         .execute(pool)
         .await?;

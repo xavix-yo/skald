@@ -1,13 +1,13 @@
-/* ── Cron Jobs page ─────────────────────────────────────────────────────────── */
+/* ── Tasks page ──────────────────────────────────────────────────────────────── */
 
-.cron-page {
+.task-page {
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
 }
 
-.cron-page-header {
+.task-page-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -18,7 +18,7 @@
   flex-shrink: 0;
 }
 
-.cron-page-title {
+.task-page-title {
   margin: 0;
   font-weight: 700;
   font-size: 1.05rem;
@@ -29,7 +29,7 @@
 
 /* ── Empty state ── */
 
-.cron-empty {
+.task-empty {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -39,24 +39,24 @@
   color: var(--bs-secondary-color);
 }
 
-.cron-empty i {
+.task-empty i {
   font-size: 2.5rem;
   margin-bottom: 12px;
   opacity: 0.5;
 }
 
-.cron-empty p {
+.task-empty p {
   margin: 0;
   font-size: 0.9rem;
 }
 
-.cron-empty code {
+.task-empty code {
   font-size: 0.82rem;
 }
 
 /* ── Grid ── */
 
-.cron-grid {
+.task-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
@@ -68,7 +68,7 @@
 
 /* ── Card ── */
 
-.cron-card {
+.task-card {
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -79,25 +79,25 @@
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.cron-card:hover {
+.task-card:hover {
   border-color: var(--bs-primary-border-subtle, #9ec5fe);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
 }
 
-.cron-card--disabled {
+.task-card--disabled {
   opacity: 0.6;
 }
 
 /* ── Card header ── */
 
-.cron-card-header {
+.task-card-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
 
-.cron-card-title-row {
+.task-card-title-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -105,13 +105,13 @@
   min-width: 0;
 }
 
-.cron-card-title {
+.task-card-title {
   font-weight: 600;
   font-size: 0.92rem;
   line-height: 1.3;
 }
 
-.cron-badge {
+.task-badge {
   font-size: 0.62rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -121,12 +121,17 @@
   white-space: nowrap;
 }
 
-.cron-badge--oneshot {
+.task-badge--oneshot {
   background: var(--bs-secondary-bg, #e9ecef);
   color: var(--bs-secondary-color, #6c757d);
 }
 
-.cron-card-delete {
+.task-badge--immediate {
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--bs-primary, #6366f1);
+}
+
+.task-card-delete {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -142,14 +147,14 @@
   transition: all 0.12s;
 }
 
-.cron-card-delete:hover {
+.task-card-delete:hover {
   opacity: 1;
   background: var(--bs-danger-bg-subtle, rgba(220,53,69,0.08));
 }
 
 /* ── Card description ── */
 
-.cron-card-desc {
+.task-card-desc {
   font-size: 0.82rem;
   color: var(--bs-secondary-color);
   line-height: 1.4;
@@ -157,7 +162,7 @@
 
 /* ── Cron expression ── */
 
-.cron-card-expr {
+.task-card-expr {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -167,26 +172,26 @@
   padding: 8px 10px;
 }
 
-.cron-card-expr i {
+.task-card-expr i {
   color: var(--bs-primary, #0d6efd);
   flex-shrink: 0;
   margin-top: 2px;
 }
 
-.cron-card-expr-text {
+.task-card-expr-text {
   display: flex;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
 }
 
-.cron-card-human {
+.task-card-human {
   font-size: 0.88rem;
   font-weight: 500;
   line-height: 1.35;
 }
 
-.cron-card-raw {
+.task-card-raw {
   font-family: var(--bs-font-monospace, monospace);
   font-size: 0.7rem;
   color: var(--bs-secondary-color);
@@ -198,20 +203,20 @@
 
 /* ── Meta info ── */
 
-.cron-card-meta {
+.task-card-meta {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 4px 16px;
   font-size: 0.78rem;
 }
 
-.cron-card-meta-item {
+.task-card-meta-item {
   display: flex;
   flex-direction: column;
   gap: 1px;
 }
 
-.cron-card-meta-label {
+.task-card-meta-label {
   font-size: 0.68rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -219,13 +224,13 @@
   color: var(--bs-secondary-color);
 }
 
-.cron-card-meta-value {
+.task-card-meta-value {
   color: var(--bs-body-color);
 }
 
 /* ── Card footer ── */
 
-.cron-card-footer {
+.task-card-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -234,14 +239,14 @@
   margin-top: auto;
 }
 
-.cron-card-toggle {
+.task-card-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
 }
 
-.cron-card-toggle-label {
+.task-card-toggle-label {
   font-size: 0.78rem;
   font-weight: 500;
   user-select: none;
@@ -249,7 +254,7 @@
 
 /* ── Footer note ── */
 
-.cron-footer-note {
+.task-footer-note {
   display: flex;
   align-items: center;
   gap: 6px;
