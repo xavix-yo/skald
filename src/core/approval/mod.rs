@@ -35,6 +35,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,7 @@ use tracing::{debug, info, warn};
 
 use crate::core::session::handler::ApprovalDecision;
 use crate::core::tools::tool_names as tn;
+use crate::core::tools::ToolCategory;
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -143,6 +145,21 @@ pub struct PendingApprovalInfo {
     pub created_at:    String,
 }
 
+// ── Session bypass ────────────────────────────────────────────────────────────
+
+/// A single in-memory bypass entry for a session.
+///
+/// The bypass converts `GateResult::Require` → `Allow` for the matching
+/// category (or all categories when `category` is `None`).
+/// `Deny` rules are never bypassed.
+struct CategoryBypass {
+    /// `None` = all categories; `Some(c)` = only tools of that category.
+    category:   Option<ToolCategory>,
+    /// `None` = no expiry (lasts until session ends / `clear_session_bypass` is called);
+    /// `Some(t)` = expires at `t`.
+    expires_at: Option<Instant>,
+}
+
 // ── Internal entry ────────────────────────────────────────────────────────────
 
 struct PendingEntry {
@@ -153,17 +170,19 @@ struct PendingEntry {
 // ── ApprovalManager ───────────────────────────────────────────────────────────
 
 pub struct ApprovalManager {
-    db:      Arc<SqlitePool>,
-    pending: Mutex<HashMap<i64, PendingEntry>>,
-    next_id: AtomicI64,
+    db:               Arc<SqlitePool>,
+    pending:          Mutex<HashMap<i64, PendingEntry>>,
+    next_id:          AtomicI64,
+    session_bypasses: Mutex<HashMap<i64, Vec<CategoryBypass>>>,
 }
 
 impl ApprovalManager {
     pub fn new(db: Arc<SqlitePool>) -> Self {
         Self {
             db,
-            pending: Mutex::new(HashMap::new()),
-            next_id: AtomicI64::new(1),
+            pending:          Mutex::new(HashMap::new()),
+            next_id:          AtomicI64::new(1),
+            session_bypasses: Mutex::new(HashMap::new()),
         }
     }
 
@@ -241,13 +260,17 @@ impl ApprovalManager {
     /// Evaluation order:
     /// 1. Hardcoded memory-path exception → `Allow`.
     /// 2. Rules sorted by `priority ASC`; first match wins.
-    /// 3. No match → `Allow` (default-open policy).
+    /// 3. Session bypass: if a matching bypass is active, `Require` → `Allow`.
+    ///    `Deny` is never bypassed.
+    /// 4. No match → `Allow` (default-open policy).
     pub async fn check(
         &self,
-        agent_id:  &str,
-        source:    &str,
-        tool_name: &str,
-        args:      &Value,
+        session_id: i64,
+        category:   Option<ToolCategory>,
+        agent_id:   &str,
+        source:     &str,
+        tool_name:  &str,
+        args:       &Value,
     ) -> GateResult {
         // Hardcoded exception: memory/ file writes are always auto-approved.
         if is_memory_path(tool_name, args) {
@@ -263,24 +286,45 @@ impl ApprovalManager {
             }
         };
 
-        for rule in &rules {
-            if !rule_matches(rule, agent_id, source, tool_name, args) {
-                continue;
+        let result = 'rules: {
+            for rule in &rules {
+                if !rule_matches(rule, agent_id, source, tool_name, args) {
+                    continue;
+                }
+                debug!(
+                    tool = tool_name, agent = agent_id, source,
+                    rule_id = rule.id, action = ?rule.action,
+                    "approval: rule matched"
+                );
+                break 'rules match rule.action {
+                    RuleAction::Require => GateResult::Require,
+                    RuleAction::Allow   => GateResult::Allow,
+                    RuleAction::Deny    => GateResult::Deny,
+                };
             }
-            debug!(
-                tool = tool_name, agent = agent_id, source,
-                rule_id = rule.id, action = ?rule.action,
-                "approval: rule matched"
-            );
-            return match rule.action {
-                RuleAction::Require => GateResult::Require,
-                RuleAction::Allow   => GateResult::Allow,
-                RuleAction::Deny    => GateResult::Deny,
-            };
+            debug!(tool = tool_name, "approval: no rule matched → allow");
+            GateResult::Allow
+        };
+
+        // Session bypass: converts Require → Allow when an active bypass matches.
+        // Deny is intentionally not bypassable.
+        if matches!(result, GateResult::Require) {
+            let mut bypasses = self.session_bypasses.lock().await;
+            if let Some(entries) = bypasses.get_mut(&session_id) {
+                // Prune expired entries lazily.
+                entries.retain(|b| b.expires_at.map_or(true, |t| Instant::now() < t));
+                let active = entries.iter().any(|b| bypass_matches(b, category));
+                if active {
+                    debug!(
+                        tool = tool_name, session_id,
+                        "approval: session bypass active → allow"
+                    );
+                    return GateResult::Allow;
+                }
+            }
         }
 
-        debug!(tool = tool_name, "approval: no rule matched → allow");
-        GateResult::Allow
+        result
     }
 
     // ── Pending registry ──────────────────────────────────────────────────────
@@ -388,6 +432,50 @@ impl ApprovalManager {
         if dropped > 0 {
             info!(session_id, dropped, "approval: cancelled pending entries (WS disconnected)");
         }
+        self.session_bypasses.lock().await.remove(&session_id);
+    }
+
+    // ── Session bypass ────────────────────────────────────────────────────────
+
+    /// Bypasses all approval prompts for `session_id` for the rest of the session.
+    pub async fn bypass_session(&self, session_id: i64) {
+        self.session_bypasses.lock().await
+            .entry(session_id)
+            .or_default()
+            .push(CategoryBypass { category: None, expires_at: None });
+        info!(session_id, "approval: bypass active (session)");
+    }
+
+    /// Bypasses all approval prompts for `session_id` for `duration`.
+    pub async fn bypass_session_for(&self, session_id: i64, duration: Duration) {
+        self.session_bypasses.lock().await
+            .entry(session_id)
+            .or_default()
+            .push(CategoryBypass { category: None, expires_at: Some(Instant::now() + duration) });
+        info!(session_id, secs = duration.as_secs(), "approval: bypass active (timed)");
+    }
+
+    /// Bypasses approval prompts for a specific tool `category` for `duration`.
+    pub async fn bypass_session_for_category(
+        &self,
+        session_id: i64,
+        category:   ToolCategory,
+        duration:   Duration,
+    ) {
+        self.session_bypasses.lock().await
+            .entry(session_id)
+            .or_default()
+            .push(CategoryBypass {
+                category:   Some(category),
+                expires_at: Some(Instant::now() + duration),
+            });
+        info!(session_id, ?category, secs = duration.as_secs(), "approval: bypass active (category)");
+    }
+
+    /// Removes all bypass entries for a session.
+    pub async fn clear_session_bypass(&self, session_id: i64) {
+        self.session_bypasses.lock().await.remove(&session_id);
+        info!(session_id, "approval: bypass cleared");
     }
 
     /// Returns a snapshot of all currently-pending approvals (for the web page).
@@ -456,6 +544,14 @@ fn pattern_matches(pattern: &str, tool_name: &str) -> bool {
         tool_name.starts_with(prefix)
     } else {
         pattern == tool_name
+    }
+}
+
+/// Returns `true` when a `CategoryBypass` entry covers the given tool `category`.
+fn bypass_matches(bypass: &CategoryBypass, category: Option<ToolCategory>) -> bool {
+    match bypass.category {
+        None     => true,                                        // all-categories bypass
+        Some(bc) => category.map_or(false, |tc| tc == bc),      // category-specific bypass
     }
 }
 

@@ -16,11 +16,12 @@ It is designed to be extensible: multiple notification channels (web, Telegram),
 
 ```
 llm_loop.rs
-  └─► ApprovalManager.check(agent_id, source, tool_name, args)
+  └─► ApprovalManager.check(session_id, category, agent_id, source, tool_name, args)
         │
         ├─ GateResult::Allow  → execute immediately
-        ├─ GateResult::Deny   → fail tool call
+        ├─ GateResult::Deny   → fail tool call (not bypassable)
         └─ GateResult::Require
+              ├─ (session bypass active?) → GateResult::Allow → execute immediately
               └─► ApprovalManager.register(...)  → (request_id, rx)
                     │  emits ServerEvent::PendingWrite or ApprovalRequired
                     └─► await rx  ← resolved by WS/Telegram via resolve(request_id, decision)
@@ -62,7 +63,8 @@ The `path_pattern` field uses the same glob logic, applied to the normalised pat
 
 1. Hardcoded exception: file-write targeting `memory/` → always `Allow`
 2. DB rules in `priority ASC, id ASC` order — first matching rule wins
-3. No matching rule → `Allow` (default-open)
+3. **Session bypass** (in-memory): if the result would be `Require` and an active bypass matches `session_id` + `category`, convert to `Allow`. `Deny` is never bypassed.
+4. No matching rule → `Allow` (default-open)
 
 ### Path Whitelist (e.g. `data/`)
 
@@ -133,6 +135,41 @@ VALUES ('email-assistant', 'mcp__gmail__list_messages', 'allow', 'free read for 
 -- For the researcher agent only, allow writes to data/research/ without approval
 INSERT INTO approval_rules (agent_id, tool_pattern, path_pattern, action, note, priority)
 VALUES ('researcher', 'write_file', 'data/research/*', 'allow', 'researcher writes freely to data/research/', 3);
+```
+
+---
+
+## Session Bypass (Temporary Allow-All)
+
+The LLM can temporarily suppress approval prompts for a session without modifying DB rules. The bypass is **in-memory only** — it disappears on app restart and when the session ends.
+
+### Activation
+
+The bypass is activated by the **human** (not the LLM) via the REST API (see below). The LLM does not have tools to activate it — giving the LLM the ability to disable its own oversight would defeat the purpose of the gate.
+
+### How It Works
+
+`ApprovalManager` holds a `session_bypasses: Mutex<HashMap<i64, Vec<CategoryBypass>>>` field. Each `CategoryBypass` entry has:
+
+- `category: Option<ToolCategory>` — `None` = all categories; `Some(c)` = only tools of that category
+- `expires_at: Option<Instant>` — `None` = no expiry; `Some(t)` = expires at instant `t`
+
+`check()` receives `session_id` and `category` (resolved by `ToolRegistry::category_of(tool_name)` in the caller). After rule evaluation, if the result is `Require` and a matching active bypass exists, the result is converted to `Allow`. Expired entries are pruned lazily on each `check()` call.
+
+### Invariants
+
+- `Deny` rules are **never** bypassable.
+- The bypass state is cleared when `cancel_for_session()` is called (WS disconnect).
+- Multiple bypasses can coexist for the same session (e.g. "all categories: 30 min" + "filesystem: indefinite").
+- MCP and interface tools have `category = None` (not in `ToolRegistry`) — they are only bypassed by an all-category bypass, not by a category-specific one.
+
+### API
+
+```rust
+approval.bypass_session(session_id).await;                                  // indefinite, all categories
+approval.bypass_session_for(session_id, Duration::from_secs(600)).await;    // 10 min, all categories
+approval.bypass_session_for_category(session_id, ToolCategory::Shell, Duration::from_secs(600)).await;
+approval.clear_session_bypass(session_id).await;                            // remove all
 ```
 
 ---
@@ -231,12 +268,13 @@ This is the current behaviour. Future work may add persistence of pending approv
 
 | File | Role |
 | ---- | ---- |
-| `src/core/approval/mod.rs` | `ApprovalManager`, `GateResult`, `ApprovalRule`, `PendingApprovalInfo` |
+| `src/core/approval/mod.rs` | `ApprovalManager`, `GateResult`, `ApprovalRule`, `PendingApprovalInfo`, `CategoryBypass`, session bypass methods |
 | `src/core/clarification/mod.rs` | `ClarificationManager`, `PendingClarificationInfo` |
 | `src/core/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications (wraps ApprovalManager, ClarificationManager, ChatHub) |
 | `src/core/db/approval_rules.rs` | SQLite queries: list, insert, update, delete |
 | `src/core/db/mod.rs` | `approval_rules` table creation |
-| `src/core/session/handler/llm_loop.rs` | Calls `approval.check()` + `approval.register()` before every tool dispatch |
+| `src/core/session/handler/llm_loop.rs` | Resolves `category` via `ToolRegistry::category_of`, calls `approval.check(session_id, category, ...)` + `approval.register()` |
+| `src/core/session/handler/resume.rs` | Same `check()` call as `llm_loop.rs` for pending tool re-gating |
 | `src/core/session/handler/mod.rs` | `ChatSessionHandler` holds `Arc<ApprovalManager>`, `Arc<ClarificationManager>`, `context_label: RwLock<Option<String>>` |
 | `src/frontend/api/inbox.rs` | `/api/inbox` endpoint + resolve for approval and clarification (uses `skald.inbox`) |
 | `src/frontend/api/approval.rs` | Approval rules CRUD + `/api/approval/pending` + `/api/approval/tools` (uses `skald.catalog` for tool listing) |

@@ -270,7 +270,9 @@ impl ChatSessionHandler {
             }).await.ok();
 
             // Re-run through the approval gate with current rules.
+            let category = self.tools.category_of(&tc.name);
             let gate = self.approval.check(
+                self.session_id, category,
                 &config.agent_id,
                 &self.source,
                 &tc.name,

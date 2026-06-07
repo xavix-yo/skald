@@ -56,6 +56,7 @@ Every tool declares a `ToolCategory`, used for access-control filtering and audi
 | `openai_definitions_sub_agents_only()` | Returns definitions for tools where `sub_agents_only() == true` |
 | `root_agent_only_names()` | Returns names of all tools where `root_agent_only() == true` — used by `for_sub_agent()` to filter |
 | `list_all()` | Returns `(name, description)` for all registered tools (sorted) |
+| `category_of(name)` | Returns `Option<ToolCategory>` for a registered tool; `None` for MCP/interface/unknown tools |
 | `dispatch(name, args)` | Executes tool by name; errors on unknown name |
 | `describe_call(name, args, length)` | Returns a human-readable label for any tool call (including non-registry tools). Falls back to `name` for unknown tools. |
 
@@ -196,9 +197,9 @@ Paths starting with `memory/` bypass the approval gate for write tools.
 2. `impl Tool` for the struct — include `fn category()`.
 3. Register in `src/main.rs`: `tool_registry.register(MyTool::new(...))`.
 4. If the tool should only be visible to certain agent depths, implement `sub_agents_only()` or `root_agent_only()` instead of using `InterfaceTool` injection.
-4. If the tool needs `ChatHub` or should only be visible to specific callers (background agents), do **not** add it to `ToolRegistry` — implement it as an `InterfaceTool` and inject it at the call site (see `tools::notify::make_tool`).
-5. If the tool needs user approval before executing, add it to `needs_approval()` in `src/core/session/handler/approval.rs`.
-6. Update this doc (catalogue table).
+5. If the tool needs `ChatHub`, a per-session resource, or should only be visible to specific callers, do **not** add it to `ToolRegistry` — implement it as an `InterfaceTool` and inject it at the call site (see `tools::notify::make_tool`).
+6. If the tool needs user approval before executing, add an `approval_rules` row (or let the admin add one). The approval gate (`ApprovalManager::check`) is rule-driven — no code change required unless the default-open policy is not suitable.
+7. Update this doc (catalogue table).
 
 ---
 

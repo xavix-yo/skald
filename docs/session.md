@@ -123,16 +123,27 @@ For each round (up to `max_tool_rounds`):
 
 ## Approval Gate
 
-The gate is `ApprovalManager.check(agent_id, source, tool_name, args)` → `GateResult`.
+The gate is `ApprovalManager.check(session_id, category, agent_id, source, tool_name, args)` → `GateResult`.
 
 **Evaluation order:**
 
 1. Hardcoded exception: file-write tools targeting a path that starts with `memory/` → `Allow` (always auto-approved).
 2. Rules from the `approval_rules` table, sorted by `priority ASC` (lower = evaluated first). First match wins.
-3. No match → `Allow` (default-open policy).
+3. **Session bypass** (in-memory, not persisted): if the result would be `Require` and an active bypass exists for this `session_id` whose `category` matches (or is `None` for all categories), convert to `Allow`. `Deny` is never bypassed.
+4. No match → `Allow` (default-open policy).
 
 **Default rules** (seeded at startup if the table is empty):
 `execute_cmd`, `restart`, `write_file`, `edit_file`, `insert_at_line`, `replace_lines` → `require`
+
+**Session bypass** is activated by the LLM via the three `approval_bypass_*` interface tools (injected in `build_agent_config`):
+
+| Tool | Effect |
+| --- | --- |
+| `approval_bypass_session` | Bypasses all `Require` for the rest of this session (no expiry) |
+| `approval_bypass_timed(minutes)` | Bypasses all `Require` for N minutes (default 10, max 120) |
+| `approval_bypass_category(category, minutes)` | Bypasses `Require` for one `ToolCategory` for N minutes |
+
+The bypass state lives in `ApprovalManager::session_bypasses` (`Mutex<HashMap<i64, Vec<CategoryBypass>>>`). Expired entries are pruned lazily on each `check()` call. All entries for a session are cleared when `cancel_for_session()` is called (WS disconnect). The state is **never persisted** — it is reset on app restart.
 
 **GateResult handling in `run_agent_turn`:**
 

@@ -117,6 +117,12 @@ impl ToolRegistry {
         }
     }
 
+    /// Returns the category of a registered tool, or `None` for unknown tools
+    /// (MCP tools, interface tools, call_agent, etc.).
+    pub fn category_of(&self, name: &str) -> Option<ToolCategory> {
+        self.tools.get(name).map(|t| t.category())
+    }
+
     /// Dispatch a tool call by name.
     pub fn dispatch(&self, name: &str, args: Value) -> Result<String> {
         match self.tools.get(name) {

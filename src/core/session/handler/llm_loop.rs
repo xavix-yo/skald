@@ -173,7 +173,9 @@ impl ChatSessionHandler {
                         }).await.ok();
 
                         // ── Approval gate ──────────────────────────────────────────────
+                        let category = self.tools.category_of(&call.name);
                         let gate = self.approval.check(
+                            self.session_id, category,
                             &config.agent_id, &self.source, &call.name, &call.arguments,
                         ).await;
                         match gate {
