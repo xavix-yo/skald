@@ -1,5 +1,5 @@
 import { html, nothing } from 'lit';
-import { LightElement }  from '../lib/base.js';
+import { LightElement } from '../lib/base.js';
 
 const PAGE_ID   = 'llm-requests';
 const PAGE_SIZE = 20;
@@ -32,34 +32,34 @@ function cacheTooltip(item) {
 
 export class LlmRequestsPage extends LightElement {
   static properties = {
-    _open:    { state: true },
-    _items:   { state: true },
-    _total:   { state: true },
-    _page:    { state: true },
-    _loading: { state: true },
-    _error:   { state: true },
-    // live filter form values
-    _agentId: { state: true },
-    _source:  { state: true },
-    _from:    { state: true },
-    _to:      { state: true },
-    // applied filters (what the last fetch used)
-    _applied: { state: true },
+    _open:      { state: true },
+    _items:     { state: true },
+    _total:     { state: true },
+    _page:      { state: true },
+    _loading:   { state: true },
+    _error:     { state: true },
+    _agentId:   { state: true },
+    _source:    { state: true },
+    _from:      { state: true },
+    _to:        { state: true },
+    _applied:   { state: true },
+    _detailId:  { state: true },
   };
 
   constructor() {
     super();
-    this._open    = false;
-    this._items   = [];
-    this._total   = 0;
-    this._page    = 1;
-    this._loading = false;
-    this._error   = null;
-    this._agentId = '';
-    this._source  = '';
-    this._from    = '';
-    this._to      = '';
-    this._applied = {};
+    this._open      = false;
+    this._items     = [];
+    this._total     = 0;
+    this._page      = 1;
+    this._loading   = false;
+    this._error     = null;
+    this._agentId   = '';
+    this._source    = '';
+    this._from      = '';
+    this._to        = '';
+    this._applied   = {};
+    this._detailId  = null;
   }
 
   connectedCallback() {
@@ -67,9 +67,35 @@ export class LlmRequestsPage extends LightElement {
     window.addEventListener('llm-page-change', (e) => {
       this._open = e.detail.page === PAGE_ID;
       this.style.display = this._open ? 'flex' : 'none';
-      if (this._open && this._items.length === 0) this._fetch(1);
+      if (this._open) {
+        const id = this._idFromHash();
+        this._detailId = id;
+        if (id == null && this._items.length === 0) this._fetch(1);
+      }
     });
   }
+
+  _idFromHash() {
+    const parts = location.hash.replace('#', '').split('/');
+    if (parts[0] === PAGE_ID && parts[1]) {
+      const n = Number(parts[1]);
+      return isNaN(n) ? null : n;
+    }
+    return null;
+  }
+
+  _openDetail(id) {
+    this._detailId = id;
+    history.pushState({}, '', `#${PAGE_ID}/${id}`);
+  }
+
+  _back() {
+    this._detailId = null;
+    history.pushState({}, '', `#${PAGE_ID}`);
+    if (this._items.length === 0) this._fetch(1);
+  }
+
+  // ── List fetching ────────────────────────────────────────────────────────────
 
   async _fetch(page) {
     this._loading = true;
@@ -105,6 +131,8 @@ export class LlmRequestsPage extends LightElement {
   }
 
   get _totalPages() { return Math.max(1, Math.ceil(this._total / PAGE_SIZE)); }
+
+  // ── Renders ──────────────────────────────────────────────────────────────────
 
   _renderFilters() {
     return html`
@@ -188,7 +216,8 @@ export class LlmRequestsPage extends LightElement {
           </thead>
           <tbody>
             ${this._items.map(r => html`
-              <tr class="${r.error_text ? 'llmr-row--error' : ''}">
+              <tr class="${r.error_text ? 'llmr-row--error' : ''} llmr-row--clickable"
+                  @click=${() => this._openDetail(r.id)}>
                 <td><span class="llmr-badge-agent">${r.agent_id ?? '—'}</span></td>
                 <td><span class="llmr-badge-source">${r.source ?? '—'}</span></td>
                 <td class="llmr-model">${r.model_name}</td>
@@ -235,13 +264,21 @@ export class LlmRequestsPage extends LightElement {
   }
 
   render() {
+    if (this._detailId != null) {
+      return html`
+        <llm-request-detail
+          .detailId=${this._detailId}
+          @detail-back=${() => this._back()}>
+        </llm-request-detail>
+      `;
+    }
+
     return html`
       <div class="llmr-page">
         <div class="llmr-header">
           <h2 class="llmr-title"><i class="bi bi-journal-code"></i> LLM Requests</h2>
           <span class="llmr-total-badge">${this._total} rows</span>
         </div>
-
         ${this._renderFilters()}
         ${this._renderTable()}
         ${this._renderPagination()}

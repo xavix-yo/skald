@@ -13,6 +13,7 @@ import { ApprovalRulesPage }  from './components/approval-rules.js';
 import { AgentInboxPage }     from './components/agent-inbox.js';
 import { HomePage }           from './components/home-page.js';
 import { LlmRequestsPage }   from './components/llm-requests.js';
+import { LlmRequestDetail }  from './components/llm-request-detail.js';
 
 customElements.define('app-topbar',           AppTopbar);
 customElements.define('app-sidebar',          AppSidebar);
@@ -29,6 +30,7 @@ customElements.define('approval-rules-page',  ApprovalRulesPage);
 customElements.define('agent-inbox-page',     AgentInboxPage);
 customElements.define('home-page',            HomePage);
 customElements.define('llm-requests-page',   LlmRequestsPage);
+customElements.define('llm-request-detail',  LlmRequestDetail);
 
 // Toggle the workspace placeholder when an LLM page opens/closes.
 const workspace = document.getElementById('app-workspace');

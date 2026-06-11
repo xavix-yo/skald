@@ -81,6 +81,7 @@ pub fn router() -> Router<Arc<Skald>> {
         // Dev / debug
         .route("/dev/debug_mode",               get(dev::get_debug_mode).post(dev::set_debug_mode).put(dev::set_debug_mode))
         .route("/dev/llm-requests",             get(dev::list_llm_requests))
+        .route("/dev/llm-requests/{id}",        get(dev::get_llm_request))
 
         .route("/stats/llm",                    get(stats::llm_stats))
         // TIC
