@@ -142,11 +142,23 @@ Cancel message (abort current turn): `{"type":"cancel"}`
 | `web/components/models-image.js` | `<models-image-section>` | Image generation model CRUD; filters providers by `supported_types.includes('image_generate')` |
 | `web/components/llm-providers.js` | `<llm-providers-page>` | LLM provider management |
 | `web/components/agents.js` | `<agents-page>` | Agent discovery and configuration |
-| `web/components/approval-rules.js` | `<approval-rules-page>` | Approval rule management |
+| `web/components/approval-groups.js` | `<approval-groups-page>` | Groups list: create, rename, duplicate, delete permission groups; navigates to rules view via `approval-navigate` event |
+| `web/components/approval-rules.js` | `<approval-rules-page>` | Per-group rules view: rule matrix, override/low-priority panels, default action bar; shows when `approval-navigate` fires with a non-null group |
 | `web/components/llm-requests.js` | `<llm-requests-page>` | LLM request log viewer with filterable table, pagination, clickable rows that drill into detail view (`#llm-requests/<id>`) |
 | `web/components/llm-request-detail.js` | `<llm-request-detail>` | LLM request detail: stat bar, system prompt, conversation messages, tool definitions, response — with collapsible sections |
 
 All components extend `LightElement` from `web/lib/base.js` (Lit-based).
+
+### Approval Rules navigation protocol
+
+`<approval-groups-page>` and `<approval-rules-page>` communicate via a custom DOM event instead of shared state:
+
+| Event | Detail | Who fires | Who handles |
+| --- | --- | --- | --- |
+| `approval-navigate` | `{ group: ToolPermissionGroup \| null }` | groups page (navigate to rules) | rules page (show with group) |
+| `approval-navigate` | `{ group: null }` | rules page (`← Back` button) | groups page (show again) |
+
+Hash persistence: `window.location.hash` is set to `#approval/{group_id}` when navigating to a rules view. On page load, the groups page reads the hash and re-fires the event so deep-links and page reloads restore the correct sub-view.
 
 ### Agent Inbox page
 

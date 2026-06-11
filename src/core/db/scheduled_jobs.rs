@@ -100,6 +100,10 @@ pub async fn create(
 }
 
 pub async fn delete(pool: &SqlitePool, id: i64) -> Result<bool> {
+    sqlx::query("DELETE FROM job_runs WHERE job_id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
     let n = sqlx::query("DELETE FROM scheduled_jobs WHERE id = ?")
         .bind(id)
         .execute(pool)

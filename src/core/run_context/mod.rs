@@ -6,14 +6,16 @@ use tracing::info;
 
 pub use crate::core::db::run_contexts::RunContextRow;
 pub use crate::core::db::tool_permission_groups::ToolPermissionGroup;
+use crate::core::approval::{ApprovalManager, RuleAction};
 
 pub struct RunContextManager {
-    db: Arc<SqlitePool>,
+    db:       Arc<SqlitePool>,
+    approval: Arc<ApprovalManager>,
 }
 
 impl RunContextManager {
-    pub fn new(db: Arc<SqlitePool>) -> Self {
-        Self { db }
+    pub fn new(db: Arc<SqlitePool>, approval: Arc<ApprovalManager>) -> Self {
+        Self { db, approval }
     }
 
     /// Seeds the built-in "default" group and run_context if they don't exist yet,
@@ -117,6 +119,69 @@ impl RunContextManager {
             bail!("cannot delete the built-in 'default' permission group");
         }
         crate::core::db::tool_permission_groups::delete(&self.db, id).await
+    }
+
+    /// Duplicates a permission group and all its rules atomically.
+    pub async fn duplicate_group(
+        &self,
+        source_id: &str,
+        new_id:    &str,
+        new_name:  &str,
+    ) -> Result<()> {
+        if new_id == "default" {
+            bail!("cannot create a permission group with reserved id 'default'");
+        }
+        let source = crate::core::db::tool_permission_groups::get(&self.db, source_id).await?
+            .ok_or_else(|| anyhow::anyhow!("source group '{source_id}' not found"))?;
+
+        let mut tx = self.db.begin().await?;
+
+        sqlx::query(
+            "INSERT INTO tool_permission_groups (id, name, description) VALUES (?, ?, ?)",
+        )
+        .bind(new_id)
+        .bind(new_name)
+        .bind(source.description.as_deref())
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "INSERT INTO approval_rules \
+                (agent_id, source, tool_pattern, path_pattern, action, note, priority, group_id) \
+             SELECT agent_id, source, tool_pattern, path_pattern, action, note, priority, ? \
+             FROM   approval_rules \
+             WHERE  group_id = ?",
+        )
+        .bind(new_id)
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    // ── Tool visibility ────────────────────────────────────────────────────────
+
+    /// Returns the effective `RuleAction` for `tool_name` under the permission group
+    /// bound to `run_context_id`. Falls back to the `"default"` group when the run
+    /// context has no explicit group or `run_context_id` is `None`.
+    /// Returns `None` when no rule matches (tool is implicitly visible).
+    pub async fn check_tool_visibility(
+        &self,
+        run_context_id: Option<&str>,
+        tool_name:      &str,
+    ) -> Option<RuleAction> {
+        let group_id = if let Some(rc_id) = run_context_id {
+            self.get_context(rc_id).await
+                .ok()
+                .flatten()
+                .and_then(|rc| rc.tool_group_id)
+                .unwrap_or_else(|| "default".to_string())
+        } else {
+            "default".to_string()
+        };
+        self.approval.check_tool_visibility(&group_id, tool_name).await
     }
 
     // ── Session assignment ─────────────────────────────────────────────────────

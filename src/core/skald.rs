@@ -220,7 +220,7 @@ impl Skald {
         }
         info!("approval manager ready");
 
-        let run_context_manager = Arc::new(RunContextManager::new(Arc::clone(&pool)));
+        let run_context_manager = Arc::new(RunContextManager::new(Arc::clone(&pool), Arc::clone(&approval)));
         if let Err(e) = run_context_manager.seed_defaults().await {
             warn!(error = %e, "failed to seed default run_context (non-fatal)");
         }

@@ -347,6 +347,18 @@ async fn last_assistant_message(pool: &SqlitePool, session_id: i64) -> Result<Op
 }
 
 async fn cleanup_expired_single_runs(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM job_runs
+         WHERE job_id IN (
+             SELECT id FROM scheduled_jobs
+             WHERE single_run = 1
+               AND enabled    = 0
+               AND last_run_at < datetime('now', '-7 days')
+         )",
+    )
+    .execute(pool)
+    .await?;
+
     let n = sqlx::query(
         "DELETE FROM scheduled_jobs
          WHERE single_run = 1

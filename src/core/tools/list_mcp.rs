@@ -19,8 +19,9 @@ impl Tool for ListMcp {
     fn category(&self) -> crate::core::tools::ToolCategory { crate::core::tools::ToolCategory::Introspection }
 
     fn description(&self) -> &str {
-        "List all configured MCP servers with their status (running, error, disabled) \
-         and the tools they expose. Use this to discover available MCP integrations."
+        "List all configured MCP servers with their status (running, error, disabled), \
+         description, friendly_name (if set), and the tools they expose. \
+         Use this to discover available MCP integrations."
     }
 
     fn parameters_schema(&self) -> Value {

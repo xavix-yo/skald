@@ -64,6 +64,21 @@ pub async fn delete_group(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+pub struct DuplicateGroupBody {
+    pub id:   String,
+    pub name: String,
+}
+
+pub async fn duplicate_group(
+    State(skald): State<Arc<Skald>>,
+    Path(p): Path<GroupPath>,
+    Json(body): Json<DuplicateGroupBody>,
+) -> Result<Json<Value>, ApiError> {
+    skald.run_context_manager.duplicate_group(&p.id, &body.id, &body.name).await?;
+    Ok(Json(json!({ "id": body.id })))
+}
+
 // ── Run Contexts ──────────────────────────────────────────────────────────────
 
 pub async fn list_contexts(

@@ -584,6 +584,40 @@ impl ApprovalManager {
             .collect()
     }
 
+    // ── Tool visibility ───────────────────────────────────────────────────────
+
+    /// Returns `false` only when the first matching rule (by tool_pattern) is `Deny`.
+    /// Path/agent/source filters are intentionally ignored — this is a static
+    /// "is the tool offered to the LLM at all?" check, not an execution-time gate.
+    /// Rules must already be loaded via `list_for_group`.
+    pub fn is_tool_visible(&self, rules: &[ApprovalRule], tool_name: &str) -> bool {
+        for rule in rules {
+            if pattern_matches(&rule.tool_pattern, tool_name) {
+                return rule.action != RuleAction::Deny;
+            }
+        }
+        true // no matching rule → visible (backward compatible)
+    }
+
+    /// Resolves the effective `RuleAction` for `tool_name` in `group_id`,
+    /// evaluating only `tool_pattern` (no path/agent/source).
+    /// Returns `None` when no rule matches (tool is implicitly visible).
+    pub async fn check_tool_visibility(
+        &self,
+        group_id:  &str,
+        tool_name: &str,
+    ) -> Option<RuleAction> {
+        let rules = crate::core::db::approval_rules::list_for_group(&self.db, Some(group_id))
+            .await
+            .unwrap_or_default();
+        for rule in &rules {
+            if pattern_matches(&rule.tool_pattern, tool_name) {
+                return Some(rule.action.clone());
+            }
+        }
+        None
+    }
+
     // ── Rule management ───────────────────────────────────────────────────────
 
     pub async fn list_rules(&self) -> Result<Vec<ApprovalRule>> {
@@ -635,7 +669,7 @@ fn rule_matches(rule: &ApprovalRule, agent_id: &str, source: &str, tool_name: &s
 }
 
 /// Matches an exact name or a `prefix*` glob.
-fn pattern_matches(pattern: &str, tool_name: &str) -> bool {
+pub(crate) fn pattern_matches(pattern: &str, tool_name: &str) -> bool {
     if pattern == "*" {
         return true;
     }

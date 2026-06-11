@@ -101,6 +101,20 @@ impl ChatSessionHandler {
         child_config.base_tool_defs.extend(self.tools.openai_definitions_sub_agents_only());
         child_config.base_tool_defs.push(super::ask_user_clarification_tool_def());
 
+        // Apply the same approval-rules visibility filter as for the parent agent.
+        // Sub-agents share the same permission group as their session.
+        {
+            let group_id    = self.tool_group_id().await;
+            let gid         = group_id.as_deref().unwrap_or("default");
+            let group_rules = crate::core::db::approval_rules::list_for_group(
+                pool, Some(gid),
+            ).await.unwrap_or_default();
+            child_config.base_tool_defs.retain(|def| {
+                let name = def["function"]["name"].as_str().unwrap_or("");
+                self.approval.is_tool_visible(&group_rules, name)
+            });
+        }
+
         // Inject show_mcp_tools (stack-scoped) so the sub-agent can activate MCPs.
         {
             let pool_clone   = Arc::clone(&self.db);

@@ -199,7 +199,13 @@ impl McpManager {
             } else {
                 McpServerStatus::Error { message: "not connected".to_string() }
             };
-            McpServerInfo { name: row.name, transport: row.transport, status }
+            McpServerInfo {
+                name: row.name,
+                transport: row.transport,
+                description: row.description,
+                friendly_name: row.friendly_name,
+                status,
+            }
         }).collect();
 
         Ok(infos)

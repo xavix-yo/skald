@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::core::approval::NewApprovalRule;
-use crate::core::tool_catalog::AllTools;
+use crate::core::tool_catalog::{AllTools, McpServerMeta};
 use std::sync::Arc;
 use crate::core::skald::Skald;
 
@@ -107,6 +107,11 @@ pub async fn list_pending(
 
 pub async fn list_tools(
     State(skald): State<Arc<Skald>>,
-) -> Json<AllTools> {
-    Json(skald.catalog.list_all())
+) -> Result<Json<AllTools>, ApiError> {
+    let mut tools = skald.catalog.list_all();
+    let server_rows = crate::core::db::mcp_servers::all(&skald.db).await?;
+    tools.mcp_servers = server_rows.into_iter()
+        .map(|r| (r.name, McpServerMeta { friendly_name: r.friendly_name, description: r.description }))
+        .collect();
+    Ok(Json(tools))
 }

@@ -316,21 +316,91 @@ This is the current behaviour. Future work may add persistence of pending approv
 
 ---
 
+## Tool Visibility Filtering
+
+Beyond the execution-time approval gate, tools are filtered at **invitation time** — before being included in the LLM context. This reduces token usage and prevents the LLM from attempting to call tools it cannot execute.
+
+### Semantics
+
+`ApprovalManager.is_tool_visible(rules, tool_name)` checks the pre-loaded rules synchronously:
+
+- If the first matching rule has action `Deny` → tool is hidden from the LLM
+- All other cases (Allow, Require, or no match) → tool is visible
+
+Only `tool_pattern` is considered (path/agent/source filters are ignored for visibility — those are execution-time concerns).
+
+### Where it runs
+
+1. **Parent agent** (`src/core/session/handler/config.rs`, `build_agent_config`): rules are loaded once with `list_for_group`, then `base_tool_defs.retain(...)` filters the list before building `AgentRunConfig`.
+2. **Sub-agents** (`src/core/session/handler/agent_dispatch.rs`, `dispatch_call_agent`): same filter applied after sub-agent-only tools are added.
+
+Sub-agents share the parent session's permission group. The execution-time `ApprovalManager.check()` gate remains active as a second enforcement layer.
+
+### Tool Visibility API
+
+```rust
+// Sync: applied to pre-loaded rules slice
+approval.is_tool_visible(rules: &[ApprovalRule], tool_name: &str) -> bool
+
+// Async: one DB round-trip, returns the matched RuleAction (or None if no rule matches)
+approval.check_tool_visibility(group_id: &str, tool_name: &str) -> Option<RuleAction>
+
+// Via RunContextManager (resolves group_id from run_context_id automatically)
+run_context_manager.check_tool_visibility(run_context_id: Option<&str>, tool_name: &str) -> Option<RuleAction>
+```
+
+---
+
+## Group Duplication
+
+`POST /api/tool-permission-groups/{id}/duplicate`
+
+Body: `{ "id": "<new_group_id>", "name": "<new display name>" }`
+
+Creates a new permission group that is an exact copy of the source group's rules. The operation is atomic: the new group row and all copied rules are inserted in a single SQLite transaction. The new group inherits the source's `description`.
+
+Implemented in `RunContextManager::duplicate_group` (`src/core/run_context/mod.rs`).
+
+---
+
+## AllTools Response (`GET /api/approval/tools`)
+
+The endpoint returns `AllTools`:
+
+```json
+{
+  "built_in": [ { "name": "read_file", "description": "...", "source": "built-in", "server": null } ],
+  "mcp": [ { "name": "mcp__gmail__list_messages", "description": "...", "source": "mcp", "server": "gmail" } ],
+  "mcp_servers": {
+    "gmail": { "friendly_name": "Gmail", "description": "Read and send Gmail messages" }
+  }
+}
+```
+
+`mcp_servers` is keyed by the MCP server's internal name (matching `server` fields in `mcp` entries). The frontend uses it to group MCP tools under their server's `friendly_name` and display the server `description` as a section subtitle.
+
+---
+
 ## Module Structure
 
 | File | Role |
 | ---- | ---- |
-| `src/core/approval/mod.rs` | `ApprovalManager`, `GateResult`, `ApprovalRule`, `PendingApprovalInfo`, `CategoryBypass`, session bypass methods |
+| `src/core/approval/mod.rs` | `ApprovalManager`, `GateResult`, `ApprovalRule`, `PendingApprovalInfo`, `CategoryBypass`, session bypass methods; `is_tool_visible` (sync); `check_tool_visibility` (async) |
 | `src/core/clarification/mod.rs` | `ClarificationManager`, `PendingClarificationInfo` |
 | `src/core/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications (wraps ApprovalManager, ClarificationManager, ChatHub) |
+| `src/core/run_context/mod.rs` | `RunContextManager`: CRUD for run contexts and permission groups; `duplicate_group` (atomic); `check_tool_visibility` (delegates to ApprovalManager with group resolution). Takes `Arc<ApprovalManager>` in constructor. |
 | `src/core/db/approval_rules.rs` | SQLite queries: list, insert, update, delete |
 | `src/core/db/mod.rs` | `approval_rules` table creation |
+| `src/core/session/handler/config.rs` | After `allow_tools` filter: loads rules once with `list_for_group`, calls `approval.is_tool_visible` to filter `base_tool_defs` for the parent agent |
+| `src/core/session/handler/agent_dispatch.rs` | Same visibility filter applied to sub-agent `base_tool_defs` after sub-agent-only tools are added |
 | `src/core/session/handler/llm_loop.rs` | Resolves `category` via `ToolRegistry::category_of`, calls `approval.check(session_id, category, ...)` + `approval.register()` |
 | `src/core/session/handler/resume.rs` | Same `check()` call as `llm_loop.rs` for pending tool re-gating |
 | `src/core/session/handler/mod.rs` | `ChatSessionHandler` holds `Arc<ApprovalManager>`, `Arc<ClarificationManager>`, `context_label: RwLock<Option<String>>` |
 | `src/frontend/api/inbox.rs` | `/api/inbox` endpoint + resolve for approval and clarification (uses `skald.inbox`) |
-| `src/frontend/api/approval.rs` | Approval rules CRUD + `/api/approval/pending` + `/api/approval/tools` (uses `skald.catalog` for tool listing) |
-| `web/components/approval-rules.js` | Two-level UI: groups list → rules per group. Manages `tool_permission_groups` via `/api/tool-permission-groups` and rules via `/api/approval/rules`. |
+| `src/frontend/api/approval.rs` | Approval rules CRUD + `/api/approval/pending` + `/api/approval/tools` (returns `AllTools` with `mcp_servers` metadata map) |
+| `src/frontend/api/run_context.rs` | `POST /api/tool-permission-groups/{id}/duplicate` handler |
+| `web/components/approval-groups.js` | Groups list page (`<approval-groups-page>`): create, rename, duplicate, delete groups; fires `approval-navigate` event |
+| `web/components/approval-rules.js` | Per-group rules view (`<approval-rules-page>`): rule matrix + override/low-priority panels + default action bar; listens to `approval-navigate` |
 | `src/frontend/api/ws.rs` | Handles `approve_tool`/`reject_tool`/`approve_write`/`reject_write` from the client |
 | `src/core/events.rs` | `ServerEvent::ApprovalRequired` (generic tools) and `PendingWrite` (files with diff) |
 
@@ -338,17 +408,22 @@ This is the current behaviour. Future work may add persistence of pending approv
 
 ## Frontend — Approval Rules page
 
-The **Approval Rules** page (`web/components/approval-rules.js`, `<approval-rules-page>`) has two tabs at the root level and a drill-down rules view:
+The UI is split into two Lit components that communicate via the `approval-navigate` custom event (see [frontend.md](frontend.md) for the event protocol).
 
-**Groups view** (root): lists all `tool_permission_groups`. Each group card shows its name, description, and rule count. Clicking navigates to the rules view. Groups can be added, renamed, or deleted; the `"default"` group cannot be deleted.
+**`<approval-groups-page>`** (`web/components/approval-groups.js`): lists all `tool_permission_groups`. Each group card shows its name, description, and rule count. Groups can be added, renamed, duplicated, or deleted; the `"default"` group cannot be deleted. Clicking a group fires `approval-navigate` with the group object and hides itself.
 
-**Rules view** (drill-down from a group): shows rules for the selected group, filtered client-side by `group_id`. Rules can be added, edited, or deleted; `group_id` is set automatically to the current group.
+**`<approval-rules-page>`** (`web/components/approval-rules.js`): per-group rules view with four panels:
 
-Each view has an informational guide banner (same style as the Agents page).
+| Panel | Priority range | Purpose |
+| --- | --- | --- |
+| Overrides | `< 0` | Wildcard/path rules evaluated before any per-tool entry |
+| Per-tool matrix | `= 0` | Simple 4-chip toggle (—/Allow/Require/Deny) per tool, grouped by category/MCP server |
+| Low Priority | `1…999998` | Wildcard/path rules as a safety net, evaluated after the matrix |
+| Default Action | `999999` | Catch-all `*` rule with no filters; inline selector; missing = no catch-all |
 
-Data is loaded in a single batch on page open (`GET /api/tool-permission-groups`, `GET /api/approval/rules`, `GET /api/approval/tools`). Group filtering is done client-side.
+MCP tools are grouped under their server's `friendly_name` (from `mcp_servers` in the `GET /api/approval/tools` response). The server `description` is shown as a subtitle.
 
-The **Agent Profiles** page (`web/components/agent-profiles.js`, `<agent-profiles-page>`) is a separate sidebar entry that manages `run_contexts`. Each profile links a session to a permission group via a dropdown. The `"default"` profile cannot be deleted. See `docs/session.md` for the resolution chain.
+The **Agent Profiles** page (`web/components/agent-profiles.js`, `<agent-profiles-page>`) is a separate sidebar entry that manages `run_contexts`. Each profile links a session to a permission group via a dropdown. The `"default"` profile cannot be deleted. See [session.md](session.md) for the resolution chain.
 
 ---
 

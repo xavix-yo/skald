@@ -62,9 +62,23 @@ All MCP servers are stored in the **`mcp_servers` table** in SQLite. There is no
 
 **Live registration** via `register_mcp` tool:
 
-- LLM calls `register_mcp` with name, transport, and connection details
+- LLM calls `register_mcp` with name, transport, connection details, and optionally `description` and `friendly_name`
 - `McpManager::register()` does DB upsert + live `start_one()` connect
 - Server is immediately available without a restart
+
+**Tool parameters:**
+
+| Parameter | Required | Type | Description |
+| --- | --- | --- | --- |
+| `name` | yes | string | Unique name for this MCP server (used to reference it in tool calls) |
+| `transport` | yes | string | `stdio`, `http`, or `sse` |
+| `command` | stdio only | string | Executable to spawn |
+| `args` | stdio only | string[] | Command-line arguments |
+| `env` | stdio only | object | Extra environment variables |
+| `url` | http/sse only | string | Base URL of the remote server |
+| `api_key` | http/sse only | string | API key (sent as `Authorization: Bearer <key>`) |
+| `description` | no | string | Short description of what the server provides (shown in `list_mcp`) |
+| `friendly_name` | no | string | Human-readable display name for UI (e.g. "Google Calendar") |
 
 **Startup timeout**: **`SERVER_START_TIMEOUT_SECS = 120`**. Servers that don't respond within 120 s are recorded as errors.
 
@@ -262,7 +276,8 @@ Sub-agents that don't include `<!-- MCP_LIST -->` in their `AGENT.md` receive no
 - A new transport type is added
 - The tool naming convention changes
 - `SERVER_START_TIMEOUT_SECS` changes
-- `register_mcp` tool parameters change
+- `register_mcp` tool parameters change (schema, required fields, description, friendly_name)
+- `list_mcp` return format changes (McpServerInfo fields)
 - A new notification source is implemented
 - Lazy loading logic changes (`build_agent_config`, `dispatch_call_agent`, `show_mcp_tools`, grant tables)
 - `ClientMessage` loses or gains fields relevant to MCP

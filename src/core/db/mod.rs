@@ -115,20 +115,25 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS mcp_servers (
-            id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            name       TEXT    NOT NULL UNIQUE,
-            transport  TEXT    NOT NULL DEFAULT 'stdio',
-            command    TEXT,
-            args_json  TEXT,
-            env_json   TEXT,
-            url        TEXT,
-            api_key    TEXT,
-            enabled    INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT    NOT NULL UNIQUE,
+            transport     TEXT    NOT NULL DEFAULT 'stdio',
+            command       TEXT,
+            args_json     TEXT,
+            env_json      TEXT,
+            url           TEXT,
+            api_key       TEXT,
+            description   TEXT,
+            friendly_name TEXT,
+            enabled       INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
     .execute(pool)
     .await?;
+
+    let _ = sqlx::query("ALTER TABLE mcp_servers ADD COLUMN description TEXT").execute(pool).await;
+    let _ = sqlx::query("ALTER TABLE mcp_servers ADD COLUMN friendly_name TEXT").execute(pool).await;
 
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS llm_providers (

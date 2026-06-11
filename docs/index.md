@@ -69,7 +69,7 @@ To add a new extracted crate: create `crates/<name>/`, add it to the `[workspace
 | `src/core/agents.rs` | Agent discovery, prompt loading | [agents.md](agents.md) |
 | `src/core/tools/` | Built-in tool registry | [tools.md](tools.md) |
 | `src/core/tools/tool_names.rs` | Centralised tool name constants (`CALL_AGENT`, `RESTART`, …) | [tools.md](tools.md) |
-| `src/core/tool_catalog.rs` | `ToolCatalog`: unified listing façade for built-in + MCP tools (wraps ToolRegistry + McpManager) | [tools.md](tools.md) |
+| `src/core/tool_catalog.rs` | `ToolCatalog`: unified listing façade for built-in + MCP tools (wraps ToolRegistry + McpManager); `AllTools` response includes `mcp_servers: HashMap<String, McpServerMeta>` (friendly name + description per MCP server) | [tools.md](tools.md) |
 | `src/core/provider/` | `ProviderRegistry` (implements `ApiProviderRegistry`) — thin wrapper around `core-api::provider`. All types re-exported for internal use. | [llm-clients.md](llm-clients.md) |
 | `src/core/service_manager.rs` | `ServiceManager` trait — lightweight umbrella for all model managers | [llm-clients.md](llm-clients.md) |
 | `src/core/chatbot/` | LLM provider clients | [llm-clients.md](llm-clients.md) |
@@ -86,6 +86,7 @@ To add a new extracted crate: create `crates/<name>/`, add it to the `[workspace
 | `src/core/transcribe/` | TranscribeManager, OpenAiAudioTranscriber, ElevenLabsTranscriber. Traits and record types re-exported from `core-api`. | [transcribe-providers.md](transcribe-providers.md) |
 | `src/core/tts/` | TtsManager (DB-backed + plugin slots), OpenAiTtsSynthesiser, ElevenLabsTtsSynthesiser. Traits and record types re-exported from `core-api`. | [tts-providers.md](tts-providers.md) |
 | `src/core/image_generate/` | ImageGenerate trait, ImageGeneratorManager (DB-backed + plugin slots), OpenRouterImageGenerator | [image-generate.md](image-generate.md) |
+| `src/core/run_context/mod.rs` | `RunContextManager`: CRUD for run contexts + permission groups; `duplicate_group` (atomic SQLite transaction); `check_tool_visibility` (resolves group from run context, delegates to `ApprovalManager`). Takes `Arc<ApprovalManager>` in constructor. | [approval.md](approval.md) |
 | `src/core/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications (wraps ApprovalManager, ClarificationManager, ChatHub) | [approval.md](approval.md) |
 | `src/core/db/` | SQLite schema and queries | [database.md](database.md) |
 | `src/core/events.rs` | WS protocol types | [frontend.md](frontend.md) |
@@ -137,7 +138,7 @@ To add a new extracted crate: create `crates/<name>/`, add it to the `[workspace
 - [gmail-mcp.md](gmail-mcp.md) — Gmail read+modify MCP server (custom Python)
 - [gmaps-mcp.md](gmaps-mcp.md) — Google Maps transit/directions MCP server (custom Python)
 - [whatsapp-mcp.md](whatsapp-mcp.md) — WhatsApp read+send MCP server (custom Node.js)
-- [approval.md](approval.md) — ApprovalManager: human-in-the-loop, rules, pending approvals, session bypass (timed/scoped per category or MCP server)
+- [approval.md](approval.md) — ApprovalManager: human-in-the-loop, rules, pending approvals, session bypass; tool visibility filtering; group duplication; AllTools MCP server metadata
 - [cron.md](cron.md) — TaskManager, cron jobs & immediate tasks, 7-field cron syntax, job lifecycle
 - [database.md](database.md) — SQLite schema, migration pattern
 - [frontend.md](frontend.md) — WebSocket protocol, ServerEvent types, Lit components

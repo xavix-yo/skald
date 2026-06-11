@@ -35,7 +35,7 @@ The cron tick loop first fires 30 s after `start()`, so both OnceLocks are guara
 ### Cleanup Loop
 
 - Waits 15 s at startup, then runs hourly
-- Calls `cleanup_expired_single_runs(pool)`: DELETE single-run jobs that are disabled and older than 7 days
+- Calls `cleanup_expired_single_runs(pool)`: deletes `job_runs` rows for expired jobs first (to satisfy the FK constraint), then deletes `scheduled_jobs` rows that are single-run, disabled, and older than 7 days
 
 ---
 

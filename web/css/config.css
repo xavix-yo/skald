@@ -1,0 +1,21 @@
+config-page {
+  display: none;
+  flex-direction: column;
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+  background: var(--bs-body-bg);
+}
+
+.config-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.config-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}

@@ -53,6 +53,8 @@ pub enum McpServerStatus {
 pub struct McpServerInfo {
     pub name:      String,
     pub transport: String,
+    pub description:   Option<String>,
+    pub friendly_name: Option<String>,
     #[serde(flatten)]
     pub status:    McpServerStatus,
 }

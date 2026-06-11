@@ -23,6 +23,7 @@ impl Tool for RegisterMcp {
         "Register (or update) an MCP server and connect to it immediately. \
          For stdio servers supply `command` and optionally `args` and `env`. \
          For HTTP/SSE servers supply `url` and optionally `api_key`. \
+         Optionally provide `description` (what the server does) and `friendly_name` (display name for UI). \
          Returns the list of tools exposed by the server once connected."
     }
 
@@ -60,6 +61,14 @@ impl Tool for RegisterMcp {
                 "api_key": {
                     "type": "string",
                     "description": "http/sse only: API key sent as `Authorization: Bearer <key>`."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "A short description of what this MCP server provides (shown in list_mcp)."
+                },
+                "friendly_name": {
+                    "type": "string",
+                    "description": "A human-readable display name for this MCP server (e.g. 'Google Calendar')."
                 }
             },
             "required": ["name", "transport"]
@@ -82,11 +91,13 @@ impl Tool for RegisterMcp {
         let p = UpsertParams {
             name,
             transport,
-            command:   args["command"].as_str(),
+            command:       args["command"].as_str(),
             args_json,
             env_json,
-            url:       args["url"].as_str(),
-            api_key:   args["api_key"].as_str(),
+            url:           args["url"].as_str(),
+            api_key:       args["api_key"].as_str(),
+            description:   args["description"].as_str(),
+            friendly_name: args["friendly_name"].as_str(),
         };
 
         let tool_names = tokio::task::block_in_place(|| {

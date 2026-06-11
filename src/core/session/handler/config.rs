@@ -60,12 +60,27 @@ impl ChatSessionHandler {
             base_tool_defs.push(super::ask_user_clarification_tool_def());
         }
 
-        // MCP tools are never filtered — access control for them is handled by the
-        // Approval gate. Only system tools (above) respect the allow_tools whitelist.
+        // Per-agent allow_tools whitelist (from agent meta.json).
         if let Some(allowed) = meta.as_ref().and_then(|m| m.allow_tools.as_ref()) {
             base_tool_defs.retain(|def| {
                 let name = def["function"]["name"].as_str().unwrap_or("");
                 allowed.iter().any(|a| a == name)
+            });
+        }
+
+        // Approval-rules visibility filter: hide tools whose effective action for
+        // this session's permission group is Deny. Rules are loaded once and applied
+        // synchronously; the execution-time gate in ApprovalManager remains as a
+        // second layer of enforcement.
+        {
+            let group_id   = self.tool_group_id().await;
+            let gid        = group_id.as_deref().unwrap_or("default");
+            let group_rules = crate::core::db::approval_rules::list_for_group(
+                &self.db, Some(gid),
+            ).await.unwrap_or_default();
+            base_tool_defs.retain(|def| {
+                let name = def["function"]["name"].as_str().unwrap_or("");
+                self.approval.is_tool_visible(&group_rules, name)
             });
         }
 
