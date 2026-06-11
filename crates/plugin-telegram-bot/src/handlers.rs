@@ -131,6 +131,7 @@ pub(crate) async fn message_handler(
                  /stop — interrupt the agent mid-turn\n\
                  /context — show last turn's token usage\n\
                  /compact — force context compaction\n\
+                 /resetmcp — remove all activated MCP tools from the session\n\
                  /sethome — receive agent notifications here\n\
                  /help — this message",
             )
@@ -146,6 +147,9 @@ pub(crate) async fn message_handler(
         }
         IncomingEvent::Command { ref name, .. } if name == "compact" => {
             handle_compact(&bot, chat_id, &shared).await;
+        }
+        IncomingEvent::Command { ref name, .. } if name == "resetmcp" => {
+            handle_reset_mcp(&bot, chat_id, &shared).await;
         }
         IncomingEvent::Voice { file_id } => {
             handle_voice(&bot, chat_id, file_id, &shared).await;
@@ -241,6 +245,21 @@ async fn handle_compact(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
         Err(e) => {
             error!(error = %e, "telegram: manual compaction failed");
             bot.send_message(chat_id, format!("⚠️ Compaction failed: {e}")).await.ok();
+        }
+    }
+}
+
+// ── /resetmcp command ─────────────────────────────────────────────────────────
+
+async fn handle_reset_mcp(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
+    match shared.chat_hub.reset_mcp("telegram").await {
+        Ok(()) => {
+            info!("telegram: MCP grants reset via /resetmcp");
+            bot.send_message(chat_id, "✅ MCP tools removed from the session.").await.ok();
+        }
+        Err(e) => {
+            error!(error = %e, "telegram: /resetmcp failed");
+            bot.send_message(chat_id, format!("⚠️ Error: {e}")).await.ok();
         }
     }
 }

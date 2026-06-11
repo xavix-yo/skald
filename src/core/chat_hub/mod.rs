@@ -204,6 +204,15 @@ impl ChatHub {
         }
     }
 
+    /// Revoke all session-scoped MCP grants for a source's active session.
+    /// The next LLM turn will start with no MCP servers activated.
+    pub async fn reset_mcp(&self, source_id: &str) -> anyhow::Result<()> {
+        let session_id = self.get_or_create_session(source_id, "main").await?;
+        crate::core::db::session_mcp_grants::revoke_all(&self.db, session_id).await?;
+        info!(source_id, session_id, "ChatHub: MCP grants reset");
+        Ok(())
+    }
+
     /// Cancel the active LLM turn for the source's session, clearing any pending
     /// approvals and clarification questions. No-op if no session is active.
     pub async fn cancel(&self, source_id: &str) {
@@ -416,5 +425,9 @@ impl ChatHubApi for ChatHub {
 
     async fn cancel(&self, source_id: &str) {
         self.cancel(source_id).await
+    }
+
+    async fn reset_mcp(&self, source_id: &str) -> anyhow::Result<()> {
+        self.reset_mcp(source_id).await
     }
 }

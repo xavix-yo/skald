@@ -90,4 +90,8 @@ pub trait ChatHubApi: Send + Sync {
     /// Cancel the active LLM turn for a source, clearing any pending approvals
     /// and clarification questions. No-op if no session is active.
     async fn cancel(&self, source_id: &str);
+
+    /// Revoke all session-scoped MCP grants for a source's active session.
+    /// The next LLM turn will start with no MCP tools activated.
+    async fn reset_mcp(&self, source_id: &str) -> anyhow::Result<()>;
 }

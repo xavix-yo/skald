@@ -121,13 +121,14 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
 
                 if cmd == "/help" {
                     let msg = "\
-**Comandi disponibili**\n\n\
-**/clear** — avvia una nuova conversazione\n\
-**/new** — alias per /clear\n\
-**/context** — mostra i token usati nell'ultimo messaggio\n\
-**/compact** — forza la compattazione del contesto\n\
-**/sethome** — imposta web come destinazione per le notifiche\n\
-**/help** — questo messaggio"
+**Available commands**\n\n\
+**/clear** — start a new conversation\n\
+**/new** — alias for /clear\n\
+**/context** — show last turn's token usage\n\
+**/compact** — force context compaction\n\
+**/resetmcp** — remove all activated MCP tools from the session\n\
+**/sethome** — set web as the destination for agent notifications\n\
+**/help** — this message"
                         .to_string();
                     let _ = socket.send(to_msg(&ServerEvent::Done {
                         message_id:    0,
@@ -175,6 +176,24 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                                 message_id:    0,
                                 stack_id:      0,
                                 content:       "⏩ Compattazione saltata (nessun messaggio da riassumere o compattazione disabilitata).".to_string(),
+                                input_tokens:  None,
+                                output_tokens: None,
+                            })).await;
+                        }
+                        Err(e) => {
+                            let _ = socket.send(to_msg(&ServerEvent::Error { message: e.to_string() })).await;
+                        }
+                    }
+                    continue;
+                }
+
+                if cmd == "/resetmcp" {
+                    match skald.chat_hub.reset_mcp(&source).await {
+                        Ok(()) => {
+                            let _ = socket.send(to_msg(&ServerEvent::Done {
+                                message_id:    0,
+                                stack_id:      0,
+                                content:       "✅ MCP tools removed from the session.".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
                             })).await;
