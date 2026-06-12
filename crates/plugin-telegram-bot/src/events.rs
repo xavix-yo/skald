@@ -5,7 +5,6 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
-use core_api::chat_hub::ChatHubApi as _;
 use core_api::events::{GlobalEvent, ServerEvent};
 
 use super::TgShared;
@@ -21,10 +20,16 @@ async fn send_approval_keyboard(
     request_id: i64,
     shared:     &Arc<TgShared>,
 ) {
-    let keyboard = InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("✅ Approve", format!("approve:{request_id}")),
-        InlineKeyboardButton::callback("❌ Reject",  format!("reject:{request_id}")),
-    ]]);
+    let keyboard = InlineKeyboardMarkup::new(vec![
+        vec![
+            InlineKeyboardButton::callback("✅ Approve",  format!("approve:{request_id}")),
+            InlineKeyboardButton::callback("❌ Reject",   format!("reject:{request_id}")),
+        ],
+        vec![
+            InlineKeyboardButton::callback("⏱ 15 min",   format!("bypass_time:900:{request_id}")),
+            InlineKeyboardButton::callback("🔄 Sessione", format!("bypass_session:{request_id}")),
+        ],
+    ]);
 
     match bot
         .send_message(chat_id, text)
@@ -338,24 +343,42 @@ pub(crate) async fn callback_handler(
     }
 
     // ── Approval buttons ──────────────────────────────────────────────────────
-    let parsed: Option<(i64, bool, &str)> =
+    enum ApprovalAction {
+        Approve,
+        Reject,
+        BypassTime(u64),
+        BypassSession,
+    }
+
+    let parsed: Option<(i64, ApprovalAction, &str)> =
         if let Some(id_str) = data.strip_prefix("approve:") {
-            id_str.parse::<i64>().ok().map(|id| (id, true, "✅ Approved"))
+            id_str.parse::<i64>().ok().map(|id| (id, ApprovalAction::Approve, "✅ Approved"))
         } else if let Some(id_str) = data.strip_prefix("reject:") {
-            id_str.parse::<i64>().ok().map(|id| (id, false, "❌ Rejected"))
+            id_str.parse::<i64>().ok().map(|id| (id, ApprovalAction::Reject, "❌ Rejected"))
+        } else if let Some(rest) = data.strip_prefix("bypass_time:") {
+            let mut parts = rest.splitn(2, ':');
+            let secs = parts.next().and_then(|s| s.parse::<u64>().ok());
+            let id   = parts.next().and_then(|s| s.parse::<i64>().ok());
+            secs.zip(id).map(|(s, id)| (id, ApprovalAction::BypassTime(s), "⏱ Bypass (timed)"))
+        } else if let Some(id_str) = data.strip_prefix("bypass_session:") {
+            id_str.parse::<i64>().ok().map(|id| (id, ApprovalAction::BypassSession, "🔄 Bypass (sessione)"))
         } else {
             None
         };
 
-    if let Some((request_id, approved, label)) = parsed {
+    if let Some((request_id, action, label)) = parsed {
         let stored = shared.pending_approvals.lock().await.remove(&msg_id);
         if let Some(stored_id) = stored {
             if stored_id == request_id {
-                let chat_hub = &shared.chat_hub;
-                if approved {
-                    chat_hub.approve(request_id).await;
-                } else {
-                    chat_hub.reject(request_id, String::new()).await;
+                match action {
+                    ApprovalAction::Approve =>
+                        shared.approval.approve(request_id).await,
+                    ApprovalAction::Reject =>
+                        shared.approval.reject(request_id, String::new()).await,
+                    ApprovalAction::BypassTime(secs) =>
+                        shared.approval.approve_with_bypass(request_id, Some(secs)).await,
+                    ApprovalAction::BypassSession =>
+                        shared.approval.approve_with_bypass(request_id, None).await,
                 }
                 info!(request_id, label, "telegram: approval resolved");
                 bot.delete_message(msg_chat_id, msg_id).await.ok();

@@ -635,6 +635,50 @@ impl ApprovalManager {
     pub async fn update_rule(&self, id: i64, r: NewApprovalRule) -> Result<()> {
         crate::core::db::approval_rules::update(&self.db, id, r).await
     }
+
+    /// Approve + register a session bypass so future tool calls of the same
+    /// category / MCP server are auto-approved.
+    ///
+    /// - `bypass_secs = Some(n)`: bypass lasts `n` seconds (0 is treated as indefinite)
+    /// - `bypass_secs = None`: bypass lasts until the session ends
+    ///
+    /// Scope is auto-detected from the pending request's tool metadata,
+    /// mirroring the web-inbox logic in `src/frontend/api/inbox.rs`.
+    pub async fn approve_with_bypass(&self, request_id: i64, bypass_secs: Option<u64>) {
+        let info = self.get_pending(request_id).await;
+        self.approve(request_id).await;
+        let Some(info) = info else { return };
+        let duration = bypass_secs
+            .filter(|&s| s > 0)
+            .map(Duration::from_secs);
+        if let Some(cat) = info.tool_category {
+            self.bypass_session_for_category(info.session_id, cat, duration).await;
+        } else if let Some(srv) = info.mcp_server {
+            self.bypass_session_for_mcp(info.session_id, srv, duration).await;
+        } else {
+            match duration {
+                Some(d) => self.bypass_session_for(info.session_id, d).await,
+                None    => self.bypass_session(info.session_id).await,
+            }
+        }
+    }
+}
+
+// ── ApprovalApi trait impl ────────────────────────────────────────────────────
+
+#[async_trait::async_trait]
+impl core_api::approval::ApprovalApi for ApprovalManager {
+    async fn approve(&self, request_id: i64) {
+        self.approve(request_id).await;
+    }
+
+    async fn reject(&self, request_id: i64, note: String) {
+        self.reject(request_id, note).await;
+    }
+
+    async fn approve_with_bypass(&self, request_id: i64, bypass_secs: Option<u64>) {
+        self.approve_with_bypass(request_id, bypass_secs).await;
+    }
 }
 
 // ── Matching helpers ──────────────────────────────────────────────────────────

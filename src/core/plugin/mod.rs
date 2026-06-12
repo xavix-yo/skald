@@ -97,6 +97,7 @@ impl PluginManager {
 
         Ok(PluginContext {
             chat_hub:                Arc::clone(&skald.chat_hub) as _,
+            approval:                Arc::clone(&skald.approval) as _,
             secrets:                 Arc::clone(&skald.secrets) as _,
             transcribe:              Arc::clone(&skald.transcribe_manager) as _,
             transcribe_registry:     Arc::clone(&skald.transcribe_manager) as _,

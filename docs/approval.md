@@ -170,7 +170,13 @@ The human can temporarily suppress approval prompts for a session without modify
 
 ### Activation
 
-The bypass is activated by the **human** (not the LLM) from the **Agent Inbox** UI or via the REST endpoint. The LLM has no tools to activate it — giving the LLM the ability to disable its own oversight would defeat the purpose of the gate.
+The bypass is activated by the **human** (not the LLM) from any of these surfaces:
+
+- **Agent Inbox** page (REST `/api/inbox/approvals/:id/resolve` with `bypass_secs`)
+- **Copilot chat** (WebSocket `approve_write`/`approve_tool` with `bypass_secs` field)
+- **Telegram bot** inline keyboard (⏱ 15 min / 🔄 Sessione buttons → `ApprovalApi::approve_with_bypass`)
+
+The LLM has no tools to activate it — giving the LLM the ability to disable its own oversight would defeat the purpose of the gate.
 
 ### Scope
 
@@ -287,7 +293,7 @@ See [frontend.md](frontend.md) for component details.
 
 ## Resolution
 
-### From WebSocket (web frontend)
+### From WebSocket (web copilot)
 
 The client sends a JSON message:
 
@@ -296,11 +302,30 @@ The client sends a JSON message:
 { "type": "reject_tool",  "request_id": 42, "note": "optional reason" }
 ```
 
-The legacy types `approve_write`/`reject_write` continue to work for backwards compatibility.
+**Bypass via WebSocket** — include `bypass_secs` on any approve message:
 
-### From Telegram (future)
+```json
+{ "type": "approve_tool", "request_id": 42, "bypass_secs": 900 }   // 15-min bypass
+{ "type": "approve_tool", "request_id": 42, "bypass_secs": 0   }   // session bypass (indefinite)
+```
 
-`ApprovalManager.resolve(request_id, decision)` is a public call: the Telegram bot can resolve it the same way as the WS handler.
+`bypass_secs = 0` maps to an indefinite bypass (until session ends); positive values are seconds. The scope (category / MCP server / all) is auto-detected from the pending request, same as the REST endpoint.
+
+The types `approve_write`/`reject_write` are aliases for `approve_tool`/`reject_tool` and work identically.
+
+### From Telegram
+
+The Telegram plugin uses `ApprovalApi::approve_with_bypass` (defined in `crates/core-api/src/approval.rs`, implemented on `ApprovalManager`). The inline keyboard shows four buttons in two rows:
+
+```text
+[✅ Approve]  [❌ Reject]
+[⏱ 15 min]   [🔄 Sessione]
+```
+
+Tapping **⏱ 15 min** → `approve_with_bypass(request_id, Some(900))`.
+Tapping **🔄 Sessione** → `approve_with_bypass(request_id, None)`.
+
+`approve_with_bypass` calls `ApprovalManager::approve()` then registers the appropriate session bypass (auto-detected scope).
 
 ---
 
@@ -385,7 +410,8 @@ The endpoint returns `AllTools`:
 
 | File | Role |
 | ---- | ---- |
-| `src/core/approval/mod.rs` | `ApprovalManager`, `GateResult`, `ApprovalRule`, `PendingApprovalInfo`, `CategoryBypass`, session bypass methods; `is_tool_visible` (sync); `check_tool_visibility` (async) |
+| `crates/core-api/src/approval.rs` | `ApprovalApi` trait — `approve`, `reject`, `approve_with_bypass`; exposed to plugins via `PluginContext` |
+| `src/core/approval/mod.rs` | `ApprovalManager`, `GateResult`, `ApprovalRule`, `PendingApprovalInfo`, `CategoryBypass`, session bypass methods; `is_tool_visible` (sync); `check_tool_visibility` (async); `impl ApprovalApi` |
 | `src/core/clarification/mod.rs` | `ClarificationManager`, `PendingClarificationInfo` |
 | `src/core/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications (wraps ApprovalManager, ClarificationManager, ChatHub) |
 | `src/core/run_context/mod.rs` | `RunContextManager`: CRUD for run contexts and permission groups; `duplicate_group` (atomic); `check_tool_visibility` (delegates to ApprovalManager with group resolution). Takes `Arc<ApprovalManager>` in constructor. |
@@ -401,7 +427,7 @@ The endpoint returns `AllTools`:
 | `src/frontend/api/run_context.rs` | `POST /api/tool-permission-groups/{id}/duplicate` handler |
 | `web/components/approval-groups.js` | Groups list page (`<approval-groups-page>`): create, rename, duplicate, delete groups; fires `approval-navigate` event |
 | `web/components/approval-rules.js` | Per-group rules view (`<approval-rules-page>`): rule matrix + override/low-priority panels + default action bar; listens to `approval-navigate` |
-| `src/frontend/api/ws.rs` | Handles `approve_tool`/`reject_tool`/`approve_write`/`reject_write` from the client |
+| `src/frontend/api/ws.rs` | Handles `approve_tool`/`reject_tool`/`approve_write`/`reject_write`; optional `bypass_secs` field activates `approve_with_bypass` |
 | `src/core/events.rs` | `ServerEvent::ApprovalRequired` (generic tools) and `PendingWrite` (files with diff) |
 
 ---

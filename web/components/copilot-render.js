@@ -126,6 +126,14 @@ export function renderPendingWrite(host, msg) {
               <button class="btn btn-sm btn-outline-danger" @click=${() => host._startReject(msg)}>
                 <i class="bi bi-x-circle me-1"></i>Reject
               </button>
+              <button class="btn btn-sm btn-outline-secondary" title="Approva e salta approvazioni simili per 15 minuti"
+                @click=${() => host._approveWriteBypass(msg, 900)}>
+                <i class="bi bi-clock me-1"></i>15 min
+              </button>
+              <button class="btn btn-sm btn-outline-secondary" title="Approva e salta tutte le approvazioni per questa sessione"
+                @click=${() => host._approveWriteBypass(msg, 0)}>
+                <i class="bi bi-arrow-repeat me-1"></i>Sessione
+              </button>
             </div>
           `}
         </div>
@@ -223,6 +231,16 @@ export function renderTool(host, msg) {
                     @click=${(e) => { e.stopPropagation(); host._rejectingId = msg.tool_call_id; host._rejectNote = ''; }}>
                     <i class="bi bi-x-circle me-1"></i>Reject
                   </button>
+                  ${msg.request_id != null ? html`
+                    <button class="btn btn-sm btn-outline-secondary" title="Approva e salta approvazioni simili per 15 minuti"
+                      @click=${(e) => { e.stopPropagation(); host._approveWsToolBypass(msg, 900); }}>
+                      <i class="bi bi-clock me-1"></i>15 min
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" title="Approva e salta tutte le approvazioni per questa sessione"
+                      @click=${(e) => { e.stopPropagation(); host._approveWsToolBypass(msg, 0); }}>
+                      <i class="bi bi-arrow-repeat me-1"></i>Sessione
+                    </button>
+                  ` : nothing}
                 </div>
               `}
             </div>

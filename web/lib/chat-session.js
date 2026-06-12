@@ -363,6 +363,13 @@ export class ChatSession extends LightElement {
     this._updatePendingWrite(msg.request_id, { status: 'approved' });
   }
 
+  _approveWriteBypass(msg, bypassSecs) {
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify({ type: 'approve_write', request_id: msg.request_id, bypass_secs: bypassSecs }));
+    }
+    this._updatePendingWrite(msg.request_id, { status: 'approved' });
+  }
+
   _startReject(msg) {
     this._rejectingId = msg.request_id;
     this._rejectNote  = '';
@@ -381,6 +388,14 @@ export class ChatSession extends LightElement {
   _approveWsTool(msg) {
     if (this._ws?.readyState === WebSocket.OPEN) {
       this._ws.send(JSON.stringify({ type: 'approve_tool', request_id: msg.request_id }));
+    }
+    this._updateTool(msg.tool_call_id, { status: 'running', request_id: null });
+    this._rejectingId = null;
+  }
+
+  _approveWsToolBypass(msg, bypassSecs) {
+    if (this._ws?.readyState === WebSocket.OPEN) {
+      this._ws.send(JSON.stringify({ type: 'approve_tool', request_id: msg.request_id, bypass_secs: bypassSecs }));
     }
     this._updateTool(msg.tool_call_id, { status: 'running', request_id: null });
     this._rejectingId = null;

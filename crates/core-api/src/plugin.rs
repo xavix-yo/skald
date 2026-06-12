@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
+use crate::approval::ApprovalApi;
 use crate::bus::ChatEventBus;
 use crate::system_bus::SystemEventBus;
 use crate::chat_hub::ChatHubApi;
@@ -29,6 +30,7 @@ pub type RouterFactory = Arc<dyn Fn() -> axum::Router + Send + Sync>;
 #[derive(Clone)]
 pub struct PluginContext {
     pub chat_hub:                Arc<dyn ChatHubApi>,
+    pub approval:                Arc<dyn ApprovalApi>,
     pub secrets:                 Arc<dyn SecretsApi>,
     pub transcribe:              Arc<dyn TranscribeProvider>,
     pub transcribe_registry:     Arc<dyn TranscribeRegistry>,

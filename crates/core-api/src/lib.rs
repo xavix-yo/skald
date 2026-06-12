@@ -1,3 +1,4 @@
+pub mod approval;
 pub mod bus;
 pub mod system_bus;
 pub mod chatbot;

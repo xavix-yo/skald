@@ -281,7 +281,14 @@ async fn handle_approval_msg(
     let Some(request_id) = v["request_id"].as_i64() else { return false };
     match v["type"].as_str() {
         Some("approve_write") | Some("approve_tool") => {
-            chat_hub.approve(request_id).await;
+            // Optional bypass: `bypass_secs` present → approve + bypass.
+            // Value 0 means indefinite (session); any positive value is seconds.
+            if let Some(bypass_secs) = v["bypass_secs"].as_u64() {
+                let secs = if bypass_secs == 0 { None } else { Some(bypass_secs) };
+                chat_hub.approval.approve_with_bypass(request_id, secs).await;
+            } else {
+                chat_hub.approve(request_id).await;
+            }
         }
         Some("reject_write") | Some("reject_tool") => {
             let note = v["note"].as_str().unwrap_or("").to_string();

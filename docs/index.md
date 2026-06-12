@@ -40,7 +40,7 @@ The project is a Cargo workspace. Extracted crates live in `crates/`:
 | Crate | Path | Notes |
 | --- | --- | --- |
 | `skald` | `.` (root) | Main application binary |
-| `core-api` | `crates/core-api/` | Shared types and traits: `ServerEvent`, `GlobalEvent`, `ChatHubApi`, `Tool`, `Memory`, `ChatbotClient`, `Transcribe`, `TextToSpeech`, `ImageGenerate`, `SecretsApi`, `LocationManager`, `InterfaceTool`, `Plugin`, `PluginContext`, `ApiProvider`, `ApiProviderRegistry`, `RemoteAccess`. Also owns all DB record types: `LlmProviderRecord`, `LlmModelRecord`, `TtsModelRecord`, `TranscribeModelRecord`, `ImageGenerateModelRecord`. |
+| `core-api` | `crates/core-api/` | Shared types and traits: `ServerEvent`, `GlobalEvent`, `ChatHubApi`, `ApprovalApi`, `Tool`, `Memory`, `ChatbotClient`, `Transcribe`, `TextToSpeech`, `ImageGenerate`, `SecretsApi`, `LocationManager`, `InterfaceTool`, `Plugin`, `PluginContext`, `ApiProvider`, `ApiProviderRegistry`, `RemoteAccess`. Also owns all DB record types: `LlmProviderRecord`, `LlmModelRecord`, `TtsModelRecord`, `TranscribeModelRecord`, `ImageGenerateModelRecord`. |
 | `llm-client` | `crates/llm-client/` | OpenAI-compatible, Anthropic, Ollama, LmStudio implementations of `ChatbotClient`. Depends on `core-api` and re-exports the trait and associated types for backward compatibility. |
 | `mcp-client` | `crates/mcp-client/` | MCP protocol layer: `McpServer` (stdio), `McpHttpServer`, `McpServerClient` trait, config types |
 | `honcho-client` | `crates/honcho-client/` | Honcho v3 REST API client — zero dependencies on the main crate |

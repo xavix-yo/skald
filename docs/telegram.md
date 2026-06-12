@@ -94,9 +94,19 @@ This means there is no restart needed after editing the file — authorization t
 When the LLM triggers a tool that requires user approval (`execute_cmd`, `restart`, write-file tools outside `memory/`):
 
 1. The bot sends a message with the operation details and a content preview.
-2. Two inline keyboard buttons appear: **✅ Approve** and **❌ Reject**.
+2. Four inline keyboard buttons appear in two rows:
+
+   ```text
+   [✅ Approve]  [❌ Reject]
+   [⏱ 15 min]   [🔄 Sessione]
+   ```
+
 3. Tapping a button resolves the pending approval and execution continues or is cancelled.
-4. The approval message is **deleted** once resolved, whether via Telegram or the web UI.
+4. **⏱ 15 min** — approves and suppresses approval prompts for tools of the same category/MCP server for 15 minutes.
+5. **🔄 Sessione** — approves and suppresses all approval prompts for the rest of the session.
+6. The approval message is **deleted** once resolved, whether via Telegram or the web UI.
+
+Bypass buttons call `ApprovalApi::approve_with_bypass` (scope auto-detected from the tool's category or MCP server). See [approval.md](approval.md) for bypass semantics.
 
 ---
 

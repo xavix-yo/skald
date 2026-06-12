@@ -31,6 +31,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use core_api::approval::ApprovalApi;
 use core_api::chat_hub::ChatHubApi;
 use core_api::location::LocationUpdater;
 use core_api::plugin::{Plugin, PluginContext};
@@ -73,6 +74,7 @@ pub(crate) struct PendingQuestion {
 
 pub(crate) struct TgShared {
     pub(crate) chat_hub:          Arc<dyn ChatHubApi>,
+    pub(crate) approval:          Arc<dyn ApprovalApi>,
     pub(crate) transcribe:        Arc<dyn TranscribeProvider>,
     pub(crate) tts:               Arc<dyn TtsProvider>,
     pub(crate) location:          Arc<dyn LocationUpdater>,
@@ -195,6 +197,7 @@ impl Plugin for TelegramPlugin {
 
         let shared = Arc::new(TgShared {
             chat_hub:          Arc::clone(&ctx.chat_hub),
+            approval:          Arc::clone(&ctx.approval),
             transcribe:        Arc::clone(&ctx.transcribe),
             tts:               Arc::clone(&ctx.tts_provider),
             location:          Arc::clone(&ctx.location),
