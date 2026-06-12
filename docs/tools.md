@@ -170,6 +170,7 @@ Filtering happens in `src/core/session/handler/config.rs` after assembling `base
 | `execute_cmd` | `workdir` (absolute path), `timeout` (1–600 s, default 120) | Output truncated at 100 KB. Description tells LLM to use dedicated tools (`read_file`, `grep_files`, etc.) instead of shell equivalents. |
 | `edit_file` | `replace_all` (bool, default false) | Replaces every occurrence when true; otherwise requires unique match. Description tells LLM to use instead of `sed`/`awk`. |
 | `grep_files` | `output_mode` (`content`/`files_only`/`count`), `context_lines` (0–10), `offset` (pagination) | Description tells LLM to use instead of `grep`/`rg`. |
+| `get_ast_outline` | `path` | Returns top-level definitions (functions, classes, structs, methods) without bodies. **tree-sitter 0.26** backend for: `.py .js .mjs .ts .tsx .go .java .c .h .cpp .cc .hpp .swift .lua .rb .sh .ex .exs .json .yaml .yml .html .css`. **syn** backend for `.rs`. Text/regex fallback for `.kt .toml .md .sql` (grammar crates incompatible with tree-sitter 0.26 at time of writing). |
 
 ---
 
