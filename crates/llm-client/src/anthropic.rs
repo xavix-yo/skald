@@ -259,6 +259,7 @@ impl ChatbotClient for AnthropicClient {
             .post(&url)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("X-Title", core_api::APP_NAME)
             .json(&body)
             .send()
             .await?

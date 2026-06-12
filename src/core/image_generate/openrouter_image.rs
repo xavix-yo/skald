@@ -57,6 +57,7 @@ impl ImageGenerate for OpenRouterImageGenerator {
         let resp = self.http
             .post(&url)
             .bearer_auth(&self.api_key)
+            .header("X-Title", core_api::APP_NAME)
             .json(&body)
             .send()
             .await

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use tracing::{debug, info, trace, warn};
 
 use crate::{ChatOptions, ChatResponse, ChatbotClient, LlmRawMeta, LlmTurn, Message, Role, ToolCall, headers_to_json, redact_key};
+use core_api::APP_NAME;
 
 /// OpenAI ChatGPT client (also compatible with any OpenAI-spec endpoint).
 pub struct OpenAiClient {
@@ -81,6 +82,7 @@ impl ChatbotClient for OpenAiClient {
             .http
             .post(self.url())
             .bearer_auth(&self.api_key)
+            .header("X-Title", APP_NAME)
             .json(&body)
             .send()
             .await?
@@ -159,7 +161,7 @@ impl ChatbotClient for OpenAiClient {
         let request_body    = body.clone();
         let request_headers = logged_headers;
 
-        let mut req = self.http.post(self.url()).bearer_auth(&self.api_key);
+        let mut req = self.http.post(self.url()).bearer_auth(&self.api_key).header("X-Title", APP_NAME);
         if self.enable_prompt_cache {
             req = req.header("anthropic-beta", "prompt-caching-2024-07-31");
         }

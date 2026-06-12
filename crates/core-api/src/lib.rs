@@ -1,3 +1,6 @@
+/// Application name, sent as `X-Title` HTTP header to LLM/image/audio providers.
+pub const APP_NAME: &str = "Skald";
+
 pub mod approval;
 pub mod bus;
 pub mod system_bus;

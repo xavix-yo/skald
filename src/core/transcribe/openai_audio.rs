@@ -74,6 +74,7 @@ impl Transcribe for OpenAiAudioTranscriber {
         let resp = self.http
             .post(&url)
             .bearer_auth(&self.api_key)
+            .header("X-Title", core_api::APP_NAME)
             .multipart(form)
             .send()
             .await
