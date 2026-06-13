@@ -151,6 +151,12 @@ pub enum ServerEvent {
     UserMessage {
         content: String,
     },
+    /// Sent to a client right after it (re)connects, reporting whether a turn is
+    /// currently in flight for its session. Lets a reloaded page restore the
+    /// SEND→STOP button state instead of assuming idle.
+    TurnRunning {
+        running: bool,
+    },
 }
 
 impl ServerEvent {
@@ -178,6 +184,7 @@ impl ServerEvent {
             Self::ApprovalResolved   { .. } => "approval_resolved",
             Self::NewSession         { .. } => "new_session",
             Self::UserMessage        { .. } => "user_message",
+            Self::TurnRunning        { .. } => "turn_running",
         }
     }
 }

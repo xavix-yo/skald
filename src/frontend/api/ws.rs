@@ -56,6 +56,13 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
 
     let mut rx = skald.chat_hub.events(&source);
 
+    // Tell this (possibly reloaded) client whether a turn is already running for
+    // its session, so it can restore the STOP button. Sent after subscribing to
+    // `rx`, so a turn that finishes right after still delivers its Done via `rx`.
+    let _ = socket.send(to_msg(&ServerEvent::TurnRunning {
+        running: session_handler.is_processing(),
+    })).await;
+
     loop {
         tokio::select! {
             // ── Inbound: message from the browser ────────────────────────────

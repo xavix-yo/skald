@@ -45,6 +45,7 @@ All events are JSON objects with a `"type"` tag (snake_case).
 | `approval_resolved` | `request_id`, `approved` | Approval resolved (any source); all clients update their UI |
 | `user_message` | `content` | User message broadcast to other clients of the same source |
 | `new_session` | `session_id` | Session was cleared (`/new`, `/clear`); clients reset their message list |
+| `turn_running` | `running` | Sent to a client on (re)connect: whether a turn is in flight for its session, so a reloaded page restores the SEND→STOP button |
 
 ---
 

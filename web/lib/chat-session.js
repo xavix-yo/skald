@@ -22,6 +22,12 @@ export class ChatSession extends LightElement {
     _clarificationAnswer:   { state: true },
   };
 
+  // Live events whose arrival implies a turn is in flight (used to restore the
+  // STOP button when reconnecting mid-turn).
+  static _STREAMING_EVENTS = new Set([
+    'thinking', 'tool_start', 'agent_start', 'pending_write', 'approval_required',
+  ]);
+
   constructor() {
     super();
     this._messages          = [];
@@ -120,7 +126,18 @@ export class ChatSession extends LightElement {
 
   _handleServerMsg(msg) {
     console.debug('[WS ←]', msg.type, msg);
+    // Receiving a live streaming event means a turn is active — restore the STOP
+    // button even if we reconnected mid-turn and missed the start. `done`/`error`
+    // reset it below.
+    if (!this._waiting && ChatSession._STREAMING_EVENTS.has(msg.type)) {
+      this._waiting = true;
+    }
     switch (msg.type) {
+      // Sent on (re)connect: authoritative running state for this session.
+      case 'turn_running':
+        this._waiting = msg.running;
+        break;
+
       case 'pending_write':
         this._push({
           kind:         'pending_write',

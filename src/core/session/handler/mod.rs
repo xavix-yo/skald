@@ -281,6 +281,13 @@ impl ChatSessionHandler {
         self.current_cancel.lock().unwrap().cancel();
     }
 
+    /// True if a turn is currently in flight (the `processing` mutex is held for
+    /// the whole duration of `handle_message` / `resume_turn`). Used to tell a
+    /// freshly (re)connected client to show the STOP button.
+    pub fn is_processing(&self) -> bool {
+        self.processing.try_lock().is_err()
+    }
+
     /// When set, any tool call that would require human approval is automatically
     /// denied instead of blocking indefinitely.
     pub fn set_auto_deny_approvals(&self) {

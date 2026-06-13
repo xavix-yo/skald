@@ -359,6 +359,10 @@ When the client sends `{"type":"resume"}`, the WS handler calls `ChatHub::resume
 
 All WS connections for the same source (including newly reconnected ones) receive the events via their global bus subscription. This avoids the previous design where events went to a local mpsc channel and were silently lost if the client reconnected while `resume_turn` was in flight.
 
+### Running-state on (re)connect
+
+A turn runs on a detached task and survives a page reload (closing the WS just `return`s from the socket loop — it does **not** cancel the turn). To let a reloaded client restore its SEND→STOP button, the WS handler — right after subscribing to the global bus — sends a `TurnRunning { running }` event to that socket, where `running = ChatSessionHandler::is_processing()` (a `try_lock` on the `processing` mutex, held for the whole turn). Because the send happens after subscribing, a turn that finishes immediately after still delivers its `Done` via the bus, which resets the client's state. The client also flips to "running" on any live streaming event (`thinking` / `tool_start` / `agent_start` / `pending_write` / `approval_required`) as a fallback. Note: with synchronous sub-agents now running recursively, the `processing` lock is held continuously for the whole parent+child tree, so `is_processing()` is a reliable signal.
+
 ---
 
 ## When to Update This File
