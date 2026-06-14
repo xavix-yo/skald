@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use sqlx::SqlitePool;
 
 use crate::core::mcp::McpManager;
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT};
 
 /// Per-session (or per-stack) tool that activates MCP servers.
 ///
@@ -57,6 +57,14 @@ impl Tool for ShowMcpTools {
             },
             "required": ["mcp_names"]
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let names = args["mcp_names"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(", "))
+            .unwrap_or_else(|| "?".to_string());
+        truncate_label(&format!("activate MCP [{names}]"), MAX_LABEL_SHORT)
     }
 
     fn execute(&self, args: Value) -> Result<String> {

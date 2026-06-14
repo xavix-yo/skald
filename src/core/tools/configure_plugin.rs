@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::core::plugin::PluginManager;
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 pub struct ConfigurePlugin(pub Arc<PluginManager>);
 
@@ -39,6 +39,13 @@ impl Tool for ConfigurePlugin {
             },
             "required": ["id", "config"]
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let id      = args["id"].as_str().unwrap_or("?");
+        let enabled = args["enabled"].as_bool().unwrap_or(true);
+        let action  = if enabled { "configure" } else { "disable" };
+        format!("{action} plugin `{id}`")
     }
 
     fn execute(&self, args: Value) -> Result<String> {

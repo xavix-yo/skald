@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::tool_names as tn;
-use super::{Tool, ToolCategory};
+use super::{Tool, ToolCategory, ToolDescriptionLength};
 
 pub struct ReadNotification;
 
@@ -21,6 +21,10 @@ impl Tool for ReadNotification {
             "properties": {},
             "required": []
         })
+    }
+
+    fn describe(&self, _args: &Value, _length: ToolDescriptionLength) -> String {
+        "read notifications".to_string()
     }
 
     fn execute(&self, _args: Value) -> Result<String> {

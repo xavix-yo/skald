@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::core::secrets::{SecretsApi, SecretsStore};
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 pub struct ListSecrets(pub Arc<SecretsStore>);
 
@@ -29,6 +29,13 @@ impl Tool for ListSecrets {
                 }
             }
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        match args["pattern"].as_str() {
+            Some(pat) => format!("list secrets ({pat})"),
+            None      => "list secrets".to_string(),
+        }
     }
 
     fn execute(&self, args: Value) -> Result<String> {

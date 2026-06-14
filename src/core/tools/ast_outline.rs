@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT};
 use crate::core::tools::fs::read_to_string;
 
 pub struct AstOutline;
@@ -36,6 +36,11 @@ impl Tool for AstOutline {
             },
             "required": ["path"]
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let path = args["path"].as_str().unwrap_or("?");
+        truncate_label(&format!("outline `{path}`"), MAX_LABEL_SHORT)
     }
 
     fn execute(&self, args: Value) -> Result<String> {

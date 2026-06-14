@@ -1,7 +1,7 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 pub struct Restart;
 
@@ -21,6 +21,10 @@ impl Tool for Restart {
             "type": "object",
             "properties": {}
         })
+    }
+
+    fn describe(&self, _args: &Value, _length: ToolDescriptionLength) -> String {
+        "restart skald".to_string()
     }
 
     fn execute(&self, _args: Value) -> Result<String> {

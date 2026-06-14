@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::core::cron::TaskManager;
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 // ── execute_task ──────────────────────────────────────────────────────────────
 //
@@ -150,6 +150,11 @@ impl Tool for DeleteCronJob {
                 "id": { "type": "integer", "description": "Task id from list_items (type=cron)" }
             }
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let id = args["id"].as_i64().map(|n| n.to_string()).unwrap_or_else(|| "?".to_string());
+        format!("delete cron job #{id}")
     }
 
     fn execute(&self, args: Value) -> Result<String> {

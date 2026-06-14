@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::core::secrets::{SecretsApi, SecretsStore};
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 pub struct SetSecret(pub Arc<SecretsStore>);
 
@@ -34,6 +34,11 @@ impl Tool for SetSecret {
             },
             "required": ["key"]
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let key = args["key"].as_str().unwrap_or("?");
+        format!("set secret {key}")
     }
 
     fn execute(&self, args: Value) -> Result<String> {

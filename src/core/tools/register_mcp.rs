@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use crate::core::db::mcp_servers::UpsertParams;
 use crate::core::mcp::McpManager;
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 pub struct RegisterMcp {
     mcp: Arc<McpManager>,
@@ -73,6 +73,11 @@ impl Tool for RegisterMcp {
             },
             "required": ["name", "transport"]
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let name = args["name"].as_str().unwrap_or("?");
+        format!("register MCP `{name}`")
     }
 
     fn execute(&self, args: Value) -> Result<String> {

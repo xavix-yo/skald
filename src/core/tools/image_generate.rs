@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::core::image_generate::ImageGeneratorManager;
-use crate::core::tools::{Tool, ToolCategory};
+use crate::core::tools::{Tool, ToolCategory, ToolDescriptionLength, truncate_label, MAX_LABEL_SHORT, MAX_LABEL_FULL};
 
 // ── image_generate_providers_list ─────────────────────────────────────────────
 
@@ -24,6 +24,10 @@ impl Tool for ImageGenerateProvidersList {
 
     fn parameters_schema(&self) -> Value {
         json!({ "type": "object", "properties": {} })
+    }
+
+    fn describe(&self, _args: &Value, _length: ToolDescriptionLength) -> String {
+        "list image providers".to_string()
     }
 
     fn execute_async<'a>(&'a self, _args: Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {
@@ -70,6 +74,15 @@ impl Tool for ImageGenerateTool {
                 }
             }
         })
+    }
+
+    fn describe(&self, args: &Value, length: ToolDescriptionLength) -> String {
+        let provider = args["provider_id"].as_str().unwrap_or("?");
+        let prompt   = args["prompt"].as_str().unwrap_or("?");
+        match length {
+            ToolDescriptionLength::Short => truncate_label(&format!("generate image ({provider})"), MAX_LABEL_SHORT),
+            ToolDescriptionLength::Full  => truncate_label(&format!("generate image ({provider}): {prompt}"), MAX_LABEL_FULL),
+        }
     }
 
     fn execute_async<'a>(&'a self, args: Value) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String>> + Send + 'a>> {

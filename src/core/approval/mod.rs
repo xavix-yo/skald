@@ -704,8 +704,8 @@ fn rule_matches(rule: &ApprovalRule, agent_id: &str, source: &str, tool_name: &s
     // path_pattern filter: if set, args["path"] must match
     if let Some(ref pp) = rule.path_pattern {
         let path = args["path"].as_str().unwrap_or("");
-        let norm = path.trim_start_matches('/').trim_start_matches("./");
-        if !pattern_matches(pp, norm) {
+        let norm = normalize_path(path);
+        if !pattern_matches(pp, &norm) {
             return false;
         }
     }
@@ -742,6 +742,22 @@ fn mcp_server_from_tool_name(name: &str) -> Option<String> {
     Some(rest[..end].to_string())
 }
 
+/// Normalises a file path to a project-relative form for rule matching.
+///
+/// If the path is absolute and falls under the process working directory, it is
+/// made relative to that directory. Otherwise the leading `/` and `./` are
+/// stripped as a best-effort fallback.
+fn normalize_path(path: &str) -> String {
+    if path.starts_with('/') {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Ok(rel) = std::path::Path::new(path).strip_prefix(&cwd) {
+                return rel.to_string_lossy().into_owned();
+            }
+        }
+    }
+    path.trim_start_matches('/').trim_start_matches("./").to_string()
+}
+
 /// Returns `true` when a file-write tool is targeting the `memory/` directory.
 /// These are always auto-approved (the LLM manages memory autonomously).
 fn is_memory_path(tool_name: &str, args: &Value) -> bool {
@@ -749,6 +765,6 @@ fn is_memory_path(tool_name: &str, args: &Value) -> bool {
         return false;
     }
     let path = args["path"].as_str().unwrap_or("");
-    let norm = path.trim_start_matches('/').trim_start_matches("./");
+    let norm = normalize_path(path);
     norm.starts_with("memory/")
 }

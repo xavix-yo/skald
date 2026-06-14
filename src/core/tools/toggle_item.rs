@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::core::cron::TaskManager;
 use crate::core::mcp::McpManager;
 use crate::core::plugin::PluginManager;
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 /// Unified enable/disable tool. Replaces `toggle_mcp`, `toggle_plugin` and
 /// `toggle_cron_job`: same operation (flip an enabled flag), uniform schema
@@ -59,6 +59,14 @@ impl Tool for ToggleItem {
                 }
             }
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let kind    = args["kind"].as_str().unwrap_or("?");
+        let id      = args["id"].as_str().unwrap_or("?");
+        let enabled = args["enabled"].as_bool().unwrap_or(true);
+        let action  = if enabled { "enable" } else { "disable" };
+        format!("{action} {kind} `{id}`")
     }
 
     fn execute(&self, args: Value) -> Result<String> {

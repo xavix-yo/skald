@@ -7,7 +7,7 @@ use crate::core::agents;
 use crate::core::cron::TaskManager;
 use crate::core::mcp::McpManager;
 use crate::core::plugin::PluginManager;
-use crate::core::tools::Tool;
+use crate::core::tools::{Tool, ToolDescriptionLength};
 
 /// Unified read-only listing tool. Replaces the per-resource `list_mcp`,
 /// `list_plugins`, `list_cron_jobs` and `list_agents` tools: same operation
@@ -55,6 +55,11 @@ impl Tool for ListItems {
                 }
             }
         })
+    }
+
+    fn describe(&self, args: &Value, _length: ToolDescriptionLength) -> String {
+        let kind = args["type"].as_str().unwrap_or("?");
+        format!("list {kind}")
     }
 
     fn execute(&self, args: Value) -> Result<String> {
