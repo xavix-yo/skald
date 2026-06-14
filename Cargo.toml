@@ -13,6 +13,7 @@ members = [
     "crates/plugin-tts-orpheus-3b",
     "crates/plugin-tts-kokoro",
     "crates/plugin-elevenlabs",
+    "crates/skald-relay-server",
 ]
 resolver = "2"
 

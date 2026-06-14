@@ -1,0 +1,55 @@
+[package]
+name = "skald-relay-server"
+version = "0.1.0"
+edition = "2024"
+description = "Skald Remote Control relay: zero-trust store-and-forward + push bridge (see data/ios-app/relay.md)"
+license = "MIT"
+
+# Main binary (the relay). Deploy entrypoint is /skald-relay-server.
+# A second binary `gen-vectors` (src/bin/gen-vectors.rs) is auto-discovered and
+# produces the crypto interop test vectors (data/ios-app/test-vectors.md §3).
+
+[dependencies]
+# --- async runtime + web/WS ---
+axum         = { version = "0.8", features = ["ws"] }
+tokio        = { version = "1", features = ["full"] }
+tokio-util   = { version = "0.7", features = ["rt"] }
+futures-util = "0.3"
+
+# --- serde / frames ---
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+async-trait = "0.1"
+
+# --- persistence ---
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "sqlite"] }
+
+# --- crypto (relay only verifies Ed25519 + derives namespace_id via SHA-256) ---
+ed25519-dalek = "2"
+sha2          = "0.10"
+subtle        = "2"          # constant-time token compare
+hex           = "0.4"
+base64        = "0.22"
+rand          = "0.8"        # CSPRNG for the 32-byte challenge nonce
+
+# --- crypto needed ONLY by the gen-vectors reference generator (E2E suite) ---
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf         = "0.12"
+aes-gcm      = "0.10"
+
+# --- observability + misc ---
+anyhow             = "1"
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono             = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[features]
+default = []
+# Live push senders (need real APNs/FCM credentials). Off by default so the
+# relay builds & runs without external creds; the normative decision/payload
+# logic is always compiled and unit-tested. See push.rs.
+push-live = []
+
+[dev-dependencies]
+# WebSocket client used by the protocol integration tests (tests/protocol.rs).
+tokio-tungstenite = "0.29"
