@@ -69,6 +69,7 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/cron/jobs/{id}",               delete(cron::delete_job))
         .route("/cron/jobs/{id}/toggle",        post(cron::toggle))
         .route("/cron/jobs/{id}/run-context",   patch(cron::set_run_context))
+        .route("/cron/runs",                    get(cron::list_runs))
         // Agent Inbox — unified pending approvals + clarifications
         .route("/inbox",                                          get(inbox::list))
         .route("/inbox/approvals/{request_id}/resolve",           post(inbox::resolve_approval))

@@ -562,5 +562,18 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
         .await?;
     }
 
+    if version < 8 {
+        sqlx::query(
+            "ALTER TABLE scheduled_jobs ADD COLUMN running_since TEXT",
+        )
+        .execute(pool).await.ok();
+        sqlx::query(
+            "INSERT OR REPLACE INTO config(key, value, updated_at)
+             VALUES('schema_version', '8', datetime('now'))",
+        )
+        .execute(pool)
+        .await?;
+    }
+
     Ok(())
 }

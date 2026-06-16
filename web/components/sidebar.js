@@ -4,26 +4,32 @@ import { LightElement } from '../lib/base.js';
 
 export class AppSidebar extends LightElement {
   static properties = {
-    _activePage:  { state: true },
-    _inboxCount:  { state: true },
-    _debugMode:   { state: true },
+    _activePage:    { state: true },
+    _tasksSection:  { state: true },
+    _inboxCount:    { state: true },
+    _debugMode:     { state: true },
   };
 
   constructor() {
     super();
-    this._activePage = null;
-    this._inboxCount = 0;
-    this._pollTimer  = null;
-    this._debugMode  = false;
+    this._activePage   = null;
+    this._tasksSection = 'running';
+    this._inboxCount   = 0;
+    this._pollTimer    = null;
+    this._debugMode    = false;
   }
 
   connectedCallback() {
     super.connectedCallback();
     window.addEventListener('popstate', (e) => {
-      this._applyPage(e.state?.page ?? this._pageFromHash());
+      const page = e.state?.page ?? this._pageFromHash();
+      if (page === 'tasks') this._tasksSection = this._tasksSectionFromHash();
+      this._applyPage(page);
     });
     window.addEventListener('hashchange', () => {
-      this._applyPage(this._pageFromHash());
+      const page = this._pageFromHash();
+      if (page === 'tasks') this._tasksSection = this._tasksSectionFromHash();
+      this._applyPage(page);
     });
     window.addEventListener('inbox-count', (e) => {
       this._inboxCount = e.detail.count;
@@ -32,7 +38,11 @@ export class AppSidebar extends LightElement {
       this._debugMode = e.detail.enabled;
     });
     // On load: home (root) if no hash, otherwise the matching page
-    setTimeout(() => this._applyPage(this._pageFromHash()), 0);
+    setTimeout(() => {
+      const page = this._pageFromHash();
+      if (page === 'tasks') this._tasksSection = this._tasksSectionFromHash();
+      this._applyPage(page);
+    }, 0);
     // Poll inbox count independently of whether the page is open.
     this._pollInbox();
     this._pollTimer = setInterval(() => this._pollInbox(), 10000);
@@ -68,6 +78,14 @@ export class AppSidebar extends LightElement {
     return ['inbox', 'tasks', 'models', 'providers', 'approval', 'agent-profiles', 'agents', 'config', 'llm-requests', 'session', 'tic'].includes(segment) ? segment : 'home';
   }
 
+  _tasksSectionFromHash() {
+    const parts = location.hash.slice(1).split('/');
+    if (parts[0] === 'tasks' && parts[1]) {
+      return ['running', 'cron', 'scheduled', 'history'].includes(parts[1]) ? parts[1] : 'running';
+    }
+    return 'running';
+  }
+
   _applyPage(page) {
     this._activePage = page;
     window.dispatchEvent(new CustomEvent('llm-page-change', { detail: { page } }));
@@ -90,6 +108,64 @@ export class AppSidebar extends LightElement {
     }
     history.pushState({ page }, '', '#' + page);
     this._applyPage(page);
+  }
+
+  _navigateTasksSection(sec, e) {
+    e.preventDefault();
+    this._tasksSection = sec;
+    history.pushState({ page: 'tasks', section: sec }, '', '#tasks/' + sec);
+    if (this._activePage !== 'tasks') {
+      this._applyPage('tasks');
+    } else {
+      // page already open — tell the TasksPage to switch section
+      window.dispatchEvent(new CustomEvent('tasks-section-change', { detail: { section: sec } }));
+    }
+  }
+
+  _openTaskManager(e) {
+    e.preventDefault();
+    if (this._activePage === 'tasks') return; // already open, submenu visible
+    const sec = this._tasksSection || 'cron';
+    history.pushState({ page: 'tasks', section: sec }, '', '#tasks/' + sec);
+    this._applyPage('tasks');
+  }
+
+  _renderTasksMenu() {
+    const active = this._activePage === 'tasks';
+    const sec    = this._tasksSection;
+    return html`
+      <a href="#tasks/cron"
+         class="sidebar-link ${active ? 'active' : ''}"
+         @click=${(e) => this._openTaskManager(e)}>
+        <i class="bi bi-lightning-charge"></i>
+        <span class="sidebar-link-name">Task Manager</span>
+        <i class="bi bi-chevron-${active ? 'up' : 'down'} sidebar-link-chevron"></i>
+      </a>
+      ${active ? html`
+        <div class="sidebar-submenu">
+          <a href="#tasks/running"
+             class="sidebar-sublink ${sec === 'running' ? 'active' : ''}"
+             @click=${(e) => this._navigateTasksSection('running', e)}>
+            <i class="bi bi-activity"></i> Running Tasks
+          </a>
+          <a href="#tasks/cron"
+             class="sidebar-sublink ${sec === 'cron' ? 'active' : ''}"
+             @click=${(e) => this._navigateTasksSection('cron', e)}>
+            <i class="bi bi-repeat"></i> Cron Jobs
+          </a>
+          <a href="#tasks/scheduled"
+             class="sidebar-sublink ${sec === 'scheduled' ? 'active' : ''}"
+             @click=${(e) => this._navigateTasksSection('scheduled', e)}>
+            <i class="bi bi-clock"></i> Scheduled Tasks
+          </a>
+          <a href="#tasks/history"
+             class="sidebar-sublink ${sec === 'history' ? 'active' : ''}"
+             @click=${(e) => this._navigateTasksSection('history', e)}>
+            <i class="bi bi-journal-text"></i> History
+          </a>
+        </div>
+      ` : nothing}
+    `;
   }
 
   render() {
@@ -117,11 +193,9 @@ export class AppSidebar extends LightElement {
               : ''}
           </span>
         </a>
-        <a href="#" class="sidebar-link ${this._activePage === 'tasks' ? 'active' : ''}"
-           @click=${(e) => this._togglePage('tasks', e)}>
-          <i class="bi bi-lightning-charge"></i>
-          <span class="sidebar-link-name">Tasks</span>
-        </a>
+
+        ${this._renderTasksMenu()}
+
         <a href="#" class="sidebar-link ${this._activePage === 'models' ? 'active' : ''}"
            @click=${(e) => this._togglePage('models', e)}>
           <i class="bi bi-cpu"></i>

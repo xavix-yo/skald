@@ -1,0 +1,7 @@
+{
+  "name": "Blueprint",
+  "description": "Transforms project ideas and specifications into comprehensive, unambiguous Markdown documentation. Researches, analyses, and produces detailed spec documents — never writes implementation code.",
+  "scope": "reasoning",
+  "strength": "very_high",
+  "icon": "icon.png"
+}

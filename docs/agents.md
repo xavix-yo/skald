@@ -57,9 +57,12 @@ When a session has no run context it uses the built-in **"default"** group. The 
 | `main` | Main Assistant | — | — | ✓ | General-purpose; persists notes in `data/memory/index.md` |
 | `architect` | Architect | `reasoning` | `high` | | Plans code changes and delegates to engineer |
 | `engineer` | Engineer | `coding` | `high` | | Writes and modifies source files across any file type |
-| `researcher` | Researcher | `general` | `average` | | Multi-step web research; returns a structured summary and saves findings to the scratchpad |
+| `researcher` | Researcher | `general` | `average` | | Multi-step web research; writes structured Markdown reports to `data/research/` and saves the path to scratchpad |
 | `worker` | Worker | — | — | ✓ | Autonomous background task executor for scheduled jobs. Uses sub-agents for complex work. Ephemeral per run. Not conversational — produces a final response captured as completion notification. |
 | `tic` | TIC | — | — | ✓ | Background event processor; calls `notify` when something is worth surfacing. Ephemeral. `notify` is injected as an `InterfaceTool` by `TicManager`. Tool access is restricted via the run context set from the `tic.run_context` property. |
+| `explorer` | Explorer | `analysis` | `average` | | Studies code, investigates bugs, analyses architecture, produces structured Markdown reports in `data/explorer/`. No implementation. |
+| `blueprint` | Blueprint | `reasoning` | `very_high` | | Transforms project ideas into comprehensive spec documents in `data/`. Never writes code. Saves output path to scratchpad. |
+
 
 ---
 

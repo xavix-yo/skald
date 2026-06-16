@@ -160,3 +160,54 @@ app-sidebar {
   text-overflow: ellipsis;
   max-width: 160px;
 }
+
+/* ── Submenu (Task Manager) ── */
+
+.sidebar-link-chevron {
+  margin-left: auto;
+  font-size: 0.7rem !important;
+  width: auto !important;
+  opacity: 0.55;
+  transition: transform 0.15s;
+}
+
+.sidebar-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  padding: 0.1rem 0 0.1rem 2rem;
+}
+
+.sidebar-sublink {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.35rem 0.75rem;
+  color: var(--sidebar-text);
+  text-decoration: none;
+  font-size: 0.84rem;
+  border-radius: 0.4rem;
+  transition: background 0.12s, color 0.12s;
+}
+
+.sidebar-sublink i {
+  font-size: 0.82rem;
+  width: 1rem;
+  text-align: center;
+  opacity: 0.7;
+}
+
+.sidebar-sublink:hover {
+  background: var(--sidebar-hover);
+  color: var(--sidebar-text-active);
+}
+
+.sidebar-sublink.active {
+  background: var(--sidebar-active-bg);
+  color: var(--sidebar-text-active);
+  font-weight: 500;
+}
+
+.sidebar-sublink.active i {
+  opacity: 1;
+}

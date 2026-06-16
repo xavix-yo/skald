@@ -7,7 +7,7 @@ import { ModelsLlmSection }       from './components/models-llm.js';
 import { ModelsTranscribeSection } from './components/models-transcribe.js';
 import { ModelsImageSection }     from './components/models-image.js';
 import { ModelsTtsSection }       from './components/models-tts.js';
-import { TasksPage }         from './components/cron-jobs.js';
+import { TasksPage }         from './components/tasks/index.js';
 import { AgentsPage }         from './components/agents.js';
 import { ApprovalGroupsPage } from './components/approval-groups.js';
 import { ApprovalRulesPage }  from './components/approval-rules.js';

@@ -15,6 +15,7 @@ pub struct ScheduledJob {
     pub next_run_at:        Option<String>,
     pub single_run:         bool,
     pub running_session_id: Option<i64>,
+    pub running_since:      Option<String>,
     pub kind:               String,
     pub created_at:         String,
     pub parent_session_id:  Option<i64>,
@@ -28,6 +29,7 @@ const SELECT: &str =
             next_run_at,
             CAST(single_run AS BOOLEAN) AS single_run,
             running_session_id,
+            running_since,
             kind,
             created_at,
             parent_session_id,
@@ -143,7 +145,7 @@ pub async fn set_next_run_at(pool: &SqlitePool, id: i64, next_run_at: &str) -> R
 /// Mark a job as in-flight. Called at the start of run_job(), before handle_message().
 pub async fn set_running(pool: &SqlitePool, id: i64, session_id: i64) -> Result<()> {
     sqlx::query(
-        "UPDATE scheduled_jobs SET running_session_id = ? WHERE id = ?",
+        "UPDATE scheduled_jobs SET running_session_id = ?, running_since = datetime('now') WHERE id = ?",
     )
     .bind(session_id)
     .bind(id)
@@ -176,6 +178,7 @@ pub async fn finish_run(
         "UPDATE scheduled_jobs
          SET last_run_at        = datetime('now'),
              running_session_id = NULL,
+             running_since      = NULL,
              next_run_at        = COALESCE(?, next_run_at),
              enabled            = CASE WHEN ? IS NULL THEN 0 ELSE enabled END
          WHERE id = ?",

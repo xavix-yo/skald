@@ -2,10 +2,23 @@
 
 tasks-page {
   display: none; /* toggled by JS */
+  flex-direction: column;
   flex: 1;
   min-width: 0;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
   border-right: 1px solid var(--toolbar-border, #e5e9f0);
+}
+
+task-running-section,
+task-cron-jobs-section,
+task-scheduled-section,
+task-history-section {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
 }
 
 llm-providers-page,

@@ -68,3 +68,36 @@ pub async fn list_for_job(pool: &SqlitePool, job_id: i64, limit: i64) -> Result<
     .await?;
     Ok(rows)
 }
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct JobRunWithMeta {
+    pub id:             i64,
+    pub job_id:         i64,
+    pub session_id:     Option<i64>,
+    pub started_at:     String,
+    pub completed_at:   Option<String>,
+    pub duration_ms:    Option<i64>,
+    pub status:         String,
+    pub final_response: Option<String>,
+    pub error:          Option<String>,
+    pub created_at:     String,
+    pub job_title:      Option<String>,
+    pub agent_id:       Option<String>,
+    pub kind:           Option<String>,
+}
+
+pub async fn list_all(pool: &SqlitePool, limit: i64) -> Result<Vec<JobRunWithMeta>> {
+    let rows = sqlx::query_as::<_, JobRunWithMeta>(
+        "SELECT jr.id, jr.job_id, jr.session_id, jr.started_at, jr.completed_at,
+                jr.duration_ms, jr.status, jr.final_response, jr.error, jr.created_at,
+                sj.title AS job_title, sj.agent_id, sj.kind
+         FROM job_runs jr
+         LEFT JOIN scheduled_jobs sj ON jr.job_id = sj.id
+         ORDER BY jr.created_at DESC
+         LIMIT ?",
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}

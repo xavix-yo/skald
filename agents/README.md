@@ -38,6 +38,8 @@ High detail, expressive.
 | **TIC** | Mysterious figure with multiple eyes, radar, data nodes | Dark purple & cyan |
 | **Tinker** | Clever craftsperson with multitool, gears, repair tools | Orange & steel grey |
 | **Worker** | Practical person with futuristic toolbelt and mechanical elements | Orange & steel grey |
+| **Blueprint** | Scholarly figure with floating scrolls and glowing quills writing words in mid-air, luminous documents orbiting | Deep indigo & burnished gold |
+
 
 ## Adding a new agent icon
 
