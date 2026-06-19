@@ -7,15 +7,14 @@ never exposed on the internet: only this plugin connects out, and only to the
 relay.
 
 - Crate: `crates/plugin-mobile-connector`
-- Shared crypto + v2 protobuf: `crates/skald-relay-common` (byte-for-byte interop
-  with the reference vectors in `data/ios-app/test-vectors.md`)
-- **Active transport:** v2 (protobuf-binary) — documented in:
-  - `data/ios-app/v2/index.md` — overview and versioning
-  - `data/ios-app/v2/relay-protocol.md` — protobuf schema, presence, live channel
-  - `data/ios-app/v2/framing.md` — E2E plaintext framing (version + compression)
-  - `data/ios-app/v2/payloads.md` — JSON payload schemas (inbox_request, inbox_update, …)
-- **Invariant semantics** (shared with v1): `data/ios-app/plugin.md`, `crypto.md`,
-  pairing, authorization, E2E encryption
+- Shared crypto + protobuf: `crates/skald-relay-common` (byte-for-byte interop
+  with the reference vectors in [relay/test-vectors.md](../relay/test-vectors.md))
+- **Protocol documentation** (canonical, in English):
+  - [relay/index.md](../relay/index.md) — architecture, actors, threat model
+  - [relay/relay-protocol.md](../relay/relay-protocol.md) — protobuf schema, auth, pairing, live channel, presence
+  - [relay/framing.md](../relay/framing.md) — E2E plaintext framing (version + compression)
+  - [relay/payloads.md](../relay/payloads.md) — JSON payload schemas (inbox_request, inbox_update, …)
+  - [relay/crypto.md](../relay/crypto.md) — crypto contract, key derivation, AEAD, anti-replay
 
 ---
 

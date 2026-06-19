@@ -57,8 +57,10 @@ const MAX_TTL: u32 = 600;
 /// The mobile-connector plugin.
 pub struct MobileConnectorPlugin {
     running: AtomicBool,
-    /// Live runtime state — present only while running.
-    inner: Mutex<Option<Arc<RelayState>>>,
+    /// Live runtime state — present only while running. Wrapped in Arc so the
+    /// HTTP router (built once at startup) can dynamically point to whichever
+    /// `RelayState` is current after a reconfigure (plugin#reload → new state).
+    inner: Arc<Mutex<Option<Arc<RelayState>>>>,
     cancel: Mutex<Option<CancellationToken>>,
     handles: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -67,7 +69,7 @@ impl MobileConnectorPlugin {
     pub fn new() -> Self {
         Self {
             running: AtomicBool::new(false),
-            inner: Mutex::new(None),
+            inner: Arc::new(Mutex::new(None)),
             cancel: Mutex::new(None),
             handles: Mutex::new(Vec::new()),
         }
@@ -260,10 +262,11 @@ impl Plugin for MobileConnectorPlugin {
     }
 
     fn http_router(&self) -> Option<axum::Router> {
-        // Build a router over the live state if running. The router is collected
-        // once at WebFrontend startup, after start_enabled() (plugin.md §12.3).
-        let state = self.inner.try_lock().ok()?.clone()?;
-        Some(router::build(state))
+        // The router is collected once at WebFrontend startup (plugin.md §12.3),
+        // but the inner `RelayState` may be replaced on reconfigure.  We hand
+        // over the shared `Arc<Mutex<…>>` so the QR route always resolves the
+        // *current* state instead of a stale snapshot.
+        Some(router::build(Arc::clone(&self.inner)))
     }
 
     fn as_any(&self) -> &dyn std::any::Any { self }

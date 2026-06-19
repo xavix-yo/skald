@@ -106,6 +106,12 @@ An event is forwarded only when **all** of the following conditions hold:
 
 All Honcho API errors are **fire-and-forget**: logged as `warn!` and never propagated to the session handler or the user. A Honcho outage has zero impact on chat functionality.
 
+`HonchoError::Request`'s `Display` walks the full `source()` chain, so transport
+failures surface the real cause in logs (e.g. `Request failed: error sending
+request for url (...): Connection reset by peer`) instead of just reqwest's
+opaque top-line. This makes host↔container issues (e.g. a stale Docker Desktop
+port-forward after a container recreation) diagnosable from the `warn!` alone.
+
 ---
 
 ## Read Path

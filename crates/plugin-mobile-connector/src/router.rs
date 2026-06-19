@@ -2,6 +2,12 @@
 //! (plugin.md §5). Mounted by the main `WebFrontend` under
 //! `/api/plugin/mobile-connector/` behind Skald's normal auth. No QR is ever
 //! written to disk — the PNG is rendered on demand from the in-memory session.
+//!
+//! The router receives the plugin's shared state cell
+//! (`Arc<Mutex<Option<Arc<RelayState>>>>`) so that every request resolves the
+//! **current** `RelayState` — the same one the LLM tools use.  This avoids the
+//! classic stale-Arc bug when the plugin is reconfigured (reload stops the old
+//! runloop + creates a fresh `RelayState`, but the router is only built once).
 
 use std::sync::Arc;
 
@@ -11,31 +17,42 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use serde::Deserialize;
+use tokio::sync::Mutex;
 
 use crate::pairing::SessionState;
 use crate::state::RelayState;
+
+/// Shared cell type: an `Arc` to a `Mutex` holding the (optional) live state.
+/// Cloned cheaply and safely shared between the plugin and the router.
+type StateCell = Arc<Mutex<Option<Arc<RelayState>>>>;
 
 #[derive(Deserialize)]
 struct QrQuery {
     code: Option<String>,
 }
 
-/// Build the plugin's router. It closes over [`RelayState`] (no Axum `State`
-/// from the host is available — plugin.md §12.3).
-pub fn build(state: Arc<RelayState>) -> Router {
+/// Build the plugin's router. Takes the shared state cell so each request
+/// resolves the *current* `RelayState` — not a snapshot from startup.
+pub fn build(state_cell: StateCell) -> Router {
     Router::new()
         .route("/pairingqrcode", get(pairing_qr))
-        .with_state(state)
+        .with_state(state_cell)
 }
 
 /// `GET /pairingqrcode?code=<random>` → PNG of the QR while active, else a
 /// placeholder PNG (plugin.md §5 table).
 async fn pairing_qr(
-    State(state): State<Arc<RelayState>>,
+    State(cell): State<StateCell>,
     Query(q): Query<QrQuery>,
 ) -> impl IntoResponse {
     let Some(code) = q.code else {
         return png_response(render_placeholder("QR non valido"));
+    };
+
+    // Dynamically resolve the *current* RelayState (same one tools use).
+    let state = match cell.lock().await.as_ref() {
+        Some(s) => Arc::clone(s),
+        None => return png_response(render_placeholder("Plugin non attivo")),
     };
 
     match state.lookup_pairing(&code) {

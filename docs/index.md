@@ -183,6 +183,17 @@ To add a new extracted crate: create `crates/<name>/`, add it to the `[workspace
 - [plugins/whisper-local.md](plugins/whisper-local.md) — Local STT via whisper.cpp, model setup, TranscribeManager integration
 - [plugins/remote.md](plugins/remote.md) — Tailscale mesh remote connectivity
 
+### Relay Protocol (Mobile Remote Control)
+
+- [relay/index.md](relay/index.md) — Architecture, actors, threat model, encoding conventions
+- [relay/crypto.md](relay/crypto.md) — Crypto contract: seed, key derivation, ECDH, HKDF, AES-256-GCM, anti-replay
+- [relay/relay-protocol.md](relay/relay-protocol.md) — WebSocket protocol: protobuf transport, auth, pairing, live channel, presence
+- [relay/framing.md](relay/framing.md) — E2E plaintext framing: version byte + optional zlib compression
+- [relay/payloads.md](relay/payloads.md) — E2E payload schemas: inbox_update, approval_response, clarification_response, …
+- [relay/describe-and-push.md](relay/describe-and-push.md) — Approval rendering: summary + structured blocks, push delivery model
+- [relay/server.md](relay/server.md) — Relay server implementation: zero-trust, store-and-forward, APNs/FCM bridge, deploy
+- [relay/test-vectors.md](relay/test-vectors.md) — Crypto test vectors + reference generator for byte-for-byte interop
+
 ### Projects & Tickets
 
 - [projects.md](projects.md) — Projects subsystem: kanban tickets, lifecycle, `build_runtime_run_context`, interactive project chats
