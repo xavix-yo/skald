@@ -19,9 +19,14 @@ plaintext = version (1 byte)  ‖  comp (1 byte)  ‖  payload
 
 | Field | Byte | Values | Meaning |
 |-------|------|--------|---------|
-| `version` | 1 | `0x01` | Framing version. Always `1` today. Unknown value → receiver discards with log. |
+| `version` | 1 | `0x01` \| `0x02` | Framing version. `0x01` = JSON app payload; `0x02` = **pipe signaling** (MsgPack, see below). Unknown value → receiver discards with log. |
 | `comp` | 1 | `0x00` \| `0x01` | Compression algorithm applied to `payload` (§2). |
-| `payload` | N | — | The content: **JSON UTF-8** ([payloads.md](payloads.md)), optionally compressed. |
+| `payload` | N | — | The content: **JSON UTF-8** ([payloads.md](payloads.md)) for `0x01`, **MsgPack `PipeSignal`** ([pipe.md §2](pipe.md)) for `0x02`; optionally compressed. |
+
+> **`version 0x02` (pipe signaling).** Reserved for the pipe control plane ([pipe.md](pipe.md)):
+> `0x02 ‖ 0x00 ‖ <MsgPack PipeSignal>` (uncompressed). It rides this same E2E channel; a receiver
+> peeks the first byte to route `0x02` to its pipe layer and `0x01` to the JSON app path. The
+> existing `decompress_payload` still only accepts `0x01` — the pipe layer handles `0x02` itself.
 
 `version` and `comp` are **in plaintext inside the plaintext** (readable only after decryption):
 they cannot go in the AAD or outside the ciphertext, or the relay would see them. They are

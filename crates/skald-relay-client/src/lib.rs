@@ -17,6 +17,7 @@
 //! - `pairing`  — in-memory pairing sessions + QR payload
 //! - `state`    — `RelayState` (networking-only: seal/open, counters, send/recv)
 //! - `ws`       — the permanent reconnecting agent WebSocket (v2 binary)
+//! - `pipe`     — pipe data plane: `PipeConnection` + `IncomingPipe` (pipe.md)
 //! - `client`   — `RelayClient`, the public façade
 
 pub mod client;
@@ -25,6 +26,7 @@ pub mod db;
 pub mod events;
 pub mod identity;
 pub mod pairing;
+pub mod pipe;
 mod state;
 mod ws;
 
@@ -34,3 +36,4 @@ pub use db::{ClientRow, ClientState};
 pub use events::RelayEvent;
 pub use identity::Identity;
 pub use pairing::{QrCodeData, SessionState, StartedPairing};
+pub use pipe::{IncomingPipe, PipeConnection, PipeRole};

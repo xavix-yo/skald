@@ -11,23 +11,32 @@
 //! (`decompress_payload`) before being emitted, so consumers only ever see the
 //! clean inner payload.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use prost::Message as _;
+use rand::RngCore;
 use skald_relay_common::crypto::{self, DIR_AGENT_TO_CLIENT, DIR_CLIENT_TO_AGENT};
+use skald_relay_common::pipe::{PipeAccept, PipeInvite, PipeReject, PipeSignal, PipeSuite, to_array};
 use skald_relay_common::proto::v2::*;
 use skald_relay_common::proto::v2::relay_frame::Frame;
 use sqlx::SqlitePool;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::db::{self, ClientRow, ClientState};
 use crate::events::RelayEvent;
 use crate::identity::Identity;
 use crate::pairing::{PairingStore, QrCodeData, SessionState, StartedPairing};
+use crate::pipe::{IncomingPipe, PipeConnection, PipeRole};
+
+/// How many inbound pipe invites the broadcast buffers before lagging.
+const INCOMING_PIPE_CHANNEL_CAP: usize = 64;
+/// How long `open_pipe` waits for a `pipe_accept` before giving up.
+const PIPE_ACCEPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Networking config snapshot the runtime needs.
 pub(crate) struct StateConfig {
@@ -51,6 +60,12 @@ pub(crate) struct RelayState {
     connected: AtomicBool,
     /// Broadcast sink for [`RelayEvent`]s consumed by the application layer.
     events_tx: broadcast::Sender<RelayEvent>,
+    /// Pending `open_pipe` waiters: connection_id → accept/reject delivery
+    /// (docs/relay/pipe.md §1). The initiator parks here until the peer replies.
+    pipe_waiters: Mutex<HashMap<[u8; 32], oneshot::Sender<Result<PipeAccept, String>>>>,
+    /// Broadcast of inbound `pipe_invite`s (responder side). The consumer calls
+    /// `accept_pipe`/`reject_pipe`. Single-consumer expected.
+    incoming_pipes_tx: broadcast::Sender<IncomingPipe>,
 }
 
 impl RelayState {
@@ -60,6 +75,7 @@ impl RelayState {
         config: StateConfig,
         events_tx: broadcast::Sender<RelayEvent>,
     ) -> Self {
+        let (incoming_pipes_tx, _) = broadcast::channel(INCOMING_PIPE_CHANNEL_CAP);
         Self {
             identity,
             db,
@@ -69,6 +85,8 @@ impl RelayState {
             aes_cache: Mutex::new(HashMap::new()),
             connected: AtomicBool::new(false),
             events_tx,
+            pipe_waiters: Mutex::new(HashMap::new()),
+            incoming_pipes_tx,
         }
     }
 
@@ -290,34 +308,49 @@ impl RelayState {
         payload: &[u8],
         live: bool,
     ) -> Result<()> {
+        // v2 framing: version(1B) ‖ comp(1B) ‖ payload (compresses over threshold).
+        let framed = crypto::compress_payload(payload);
+        self.seal_and_queue(client_ed25519_pub, &framed, live).await
+    }
+
+    /// Seal an already-framed plaintext to `dest` and queue the `message` frame.
+    /// Shared by [`send_to_client`](Self::send_to_client) (v2 app framing) and
+    /// [`send_pipe_signal`](Self::send_pipe_signal) (pipe framing).
+    async fn seal_and_queue(&self, dest: &[u8; 32], framed: &[u8], live: bool) -> Result<()> {
         let aes_key = self
-            .aes_key_for(client_ed25519_pub)
+            .aes_key_for(dest)
             .await
-            .ok_or_else(|| anyhow::anyhow!("no aes_key for client"))?;
+            .ok_or_else(|| anyhow!("no aes_key for client"))?;
 
         // Persist the send counter BEFORE sealing/sending (crypto.md §8/§9):
         // a crash after this point never reuses a nonce.
-        let counter = db::next_send_counter(&self.db, client_ed25519_pub).await?;
+        let counter = db::next_send_counter(&self.db, dest).await?;
         let nonce = crypto::build_nonce(DIR_AGENT_TO_CLIENT, counter);
         let aad = crypto::build_aad(
             &self.identity.namespace_id_raw(),
             &self.identity.ed25519_pub(),
-            client_ed25519_pub,
+            dest,
         );
-        // v2 framing: version(1B) ‖ comp(1B) ‖ payload (compresses over threshold).
-        let framed = crypto::compress_payload(payload);
-        let sealed = crypto::seal(&aes_key, &nonce, &aad, &framed)
-            .map_err(|e| anyhow::anyhow!("seal failed: {e}"))?;
+        let sealed = crypto::seal(&aes_key, &nonce, &aad, framed)
+            .map_err(|e| anyhow!("seal failed: {e}"))?;
 
         let frame = RelayFrame {
             frame: Some(Frame::Message(Message {
                 ciphertext: prost::bytes::Bytes::from(sealed),
                 nonce: prost::bytes::Bytes::copy_from_slice(&nonce),
-                peer: prost::bytes::Bytes::copy_from_slice(client_ed25519_pub),
+                peer: prost::bytes::Bytes::copy_from_slice(dest),
                 live,
             })),
         };
         self.send_frame(frame.encode_to_vec())
+    }
+
+    /// Seal + queue a pipe-signaling message (docs/relay/pipe.md §1) over the E2E
+    /// channel, wrapped in the reserved pipe framing so the peer routes it to its
+    /// pipe layer. Always `live` (a stale invite is useless, pipe.md §1).
+    async fn send_pipe_signal(&self, dest: &[u8; 32], signal: &PipeSignal) -> Result<()> {
+        let framed = crypto::frame_pipe_signal(&skald_relay_common::pipe::encode(signal));
+        self.seal_and_queue(dest, &framed, true).await
     }
 
     // ── Receive ───────────────────────────────────────────────────────────────
@@ -373,6 +406,17 @@ impl RelayState {
             warn!(crate_name = "skald-relay-client", error = %e, "failed to persist recv_counter");
         }
 
+        // Pipe signaling rides this same E2E channel under a reserved framing
+        // version (crypto::FRAMING_VERSION_PIPE). Route it to the pipe layer
+        // instead of emitting a Message; all other payloads stay pass-through.
+        if crypto::is_pipe_signal(&framed) {
+            match crypto::unframe_pipe_signal(&framed) {
+                Some(body) => self.handle_pipe_signal(from, body),
+                None => warn!(crate_name = "skald-relay-client", "malformed pipe signal framing dropped"),
+            }
+            return;
+        }
+
         // Peel the v2 framing so the consumer sees the clean inner payload.
         let payload = match crypto::decompress_payload(&framed) {
             Ok(p) => p,
@@ -383,5 +427,247 @@ impl RelayState {
         };
 
         self.emit(RelayEvent::Message { from: *from, payload, live });
+    }
+
+    // ── Pipe control plane (docs/relay/pipe.md §1, §3) ────────────────────────
+
+    /// Subscribe to inbound `pipe_invite`s (responder side). Single-consumer
+    /// expected: the consumer accepts/rejects each pipe exactly once.
+    pub(crate) fn incoming_pipes(&self) -> broadcast::Receiver<IncomingPipe> {
+        self.incoming_pipes_tx.subscribe()
+    }
+
+    /// Route a decoded pipe-signaling message: invites surface to the app via the
+    /// incoming-pipes broadcast; accept/reject wake the matching `open_pipe`
+    /// waiter. This is the only payload kind the otherwise payload-agnostic client
+    /// interprets (it owns the pipe control plane end-to-end).
+    fn handle_pipe_signal(&self, from: &[u8; 32], body: &[u8]) {
+        let signal: PipeSignal = match skald_relay_common::pipe::decode(body) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(crate_name = "skald-relay-client", error = %e, "malformed pipe signal dropped");
+                return;
+            }
+        };
+        match signal {
+            PipeSignal::Invite(inv) => {
+                let Some(connection_id) = to_array::<32>(&inv.connection_id) else {
+                    warn!(crate_name = "skald-relay-client", "pipe invite with bad connection_id");
+                    return;
+                };
+                let _ = self.incoming_pipes_tx.send(IncomingPipe {
+                    from: *from,
+                    stream_type: inv.stream_type,
+                    headers: inv.headers,
+                    connection_id,
+                    suite: inv.suite,
+                    peer_handshake: inv.handshake,
+                });
+            }
+            PipeSignal::Accept(acc) => {
+                if let Some(cid) = to_array::<32>(&acc.connection_id)
+                    && let Some(tx) = self.pipe_waiters.lock().unwrap().remove(&cid)
+                {
+                    let _ = tx.send(Ok(acc));
+                }
+            }
+            PipeSignal::Reject(rej) => {
+                if let Some(cid) = to_array::<32>(&rej.connection_id)
+                    && let Some(tx) = self.pipe_waiters.lock().unwrap().remove(&cid)
+                {
+                    let _ = tx.send(Err(rej.reason));
+                }
+            }
+        }
+    }
+
+    /// Initiator: open a pipe to `peer`. Generates an ephemeral X25519, sends
+    /// `pipe_invite`, waits for `pipe_accept`, derives the per-pipe key (PFS),
+    /// then dials the data plane.
+    pub(crate) async fn open_pipe(
+        &self,
+        peer: &[u8; 32],
+        stream_type: &str,
+        headers: BTreeMap<String, String>,
+    ) -> Result<PipeConnection> {
+        let mut eph_priv = [0u8; 32];
+        rand::rng().fill_bytes(&mut eph_priv);
+        let eph_pub = crypto::x25519_pubkey(&eph_priv);
+        let mut connection_id = [0u8; 32];
+        rand::rng().fill_bytes(&mut connection_id);
+
+        let rx = self.register_pipe_waiter(connection_id);
+        let invite = PipeSignal::Invite(PipeInvite {
+            connection_id: connection_id.to_vec(),
+            suite: PipeSuite::X25519Sealed,
+            handshake: eph_pub.to_vec(),
+            stream_type: stream_type.to_string(),
+            compress: vec![skald_relay_common::pipe::PipeCompress::None],
+            headers,
+        });
+        if let Err(e) = self.send_pipe_signal(peer, &invite).await {
+            self.pipe_waiters.lock().unwrap().remove(&connection_id);
+            return Err(e);
+        }
+
+        let accept = match tokio::time::timeout(PIPE_ACCEPT_TIMEOUT, rx).await {
+            Ok(Ok(Ok(acc))) => acc,
+            Ok(Ok(Err(reason))) => return Err(anyhow!("pipe rejected by peer: {reason}")),
+            _ => {
+                self.pipe_waiters.lock().unwrap().remove(&connection_id);
+                return Err(anyhow!("pipe accept timed out"));
+            }
+        };
+        let peer_eph = to_array::<32>(&accept.handshake)
+            .ok_or_else(|| anyhow!("pipe accept has a bad ephemeral key"))?;
+        let pipe_key = crypto::derive_pipe_key(&crypto::ecdh(&eph_priv, &peer_eph));
+
+        PipeConnection::connect(
+            &self.relay_url(),
+            &self.identity.signing_key(),
+            &self.identity.ed25519_pub(),
+            peer,
+            &self.identity.namespace_id_raw(),
+            &connection_id,
+            &pipe_key,
+            PipeRole::Initiator,
+        )
+        .await
+    }
+
+    /// Responder: accept an inbound invite. Replies with `pipe_accept`, derives
+    /// the per-pipe key, then dials the data plane.
+    pub(crate) async fn accept_pipe(&self, incoming: &IncomingPipe) -> Result<PipeConnection> {
+        // v1 supports only the X25519Sealed suite; a future Noise suite is a new
+        // arm here (the wire shape is unchanged — pipe.md forward-compat).
+        if incoming.suite != PipeSuite::X25519Sealed {
+            return Err(anyhow!("unsupported pipe suite"));
+        }
+        let peer_eph = to_array::<32>(&incoming.peer_handshake)
+            .ok_or_else(|| anyhow!("pipe invite has a bad ephemeral key"))?;
+        let mut eph_priv = [0u8; 32];
+        rand::rng().fill_bytes(&mut eph_priv);
+        let eph_pub = crypto::x25519_pubkey(&eph_priv);
+        let pipe_key = crypto::derive_pipe_key(&crypto::ecdh(&eph_priv, &peer_eph));
+
+        let accept = PipeSignal::Accept(PipeAccept {
+            connection_id: incoming.connection_id.to_vec(),
+            suite: PipeSuite::X25519Sealed,
+            handshake: eph_pub.to_vec(),
+            compress: skald_relay_common::pipe::PipeCompress::None,
+        });
+        self.send_pipe_signal(&incoming.from, &accept).await?;
+
+        PipeConnection::connect(
+            &self.relay_url(),
+            &self.identity.signing_key(),
+            &self.identity.ed25519_pub(),
+            &incoming.from,
+            &self.identity.namespace_id_raw(),
+            &incoming.connection_id,
+            &pipe_key,
+            PipeRole::Responder,
+        )
+        .await
+    }
+
+    /// Decline an inbound invite (sends `pipe_reject`).
+    pub(crate) async fn reject_pipe(&self, incoming: &IncomingPipe, reason: &str) -> Result<()> {
+        let reject = PipeSignal::Reject(PipeReject {
+            connection_id: incoming.connection_id.to_vec(),
+            reason: reason.to_string(),
+        });
+        self.send_pipe_signal(&incoming.from, &reject).await
+    }
+
+    /// Register an `open_pipe` waiter keyed by `connection_id`; the inbound
+    /// `pipe_accept`/`pipe_reject` resolves it.
+    fn register_pipe_waiter(
+        &self,
+        connection_id: [u8; 32],
+    ) -> oneshot::Receiver<Result<PipeAccept, String>> {
+        let (tx, rx) = oneshot::channel();
+        self.pipe_waiters.lock().unwrap().insert(connection_id, tx);
+        rx
+    }
+}
+
+#[cfg(test)]
+mod pipe_signal_tests {
+    use super::*;
+    use skald_relay_common::pipe::PipeCompress;
+
+    async fn make_state() -> RelayState {
+        let db = std::env::temp_dir().join(format!("relay-cli-state-{}.db", std::process::id()));
+        let pool = SqlitePool::connect(&format!("sqlite://{}?mode=rwc", db.display()))
+            .await
+            .unwrap();
+        db::init(&pool).await.unwrap();
+        let (events_tx, _) = broadcast::channel(16);
+        RelayState::new(
+            Identity::from_seed(&[1u8; 32]),
+            Arc::new(pool),
+            StateConfig { relay_url: String::new(), pairing_ttl: 300 },
+            events_tx,
+        )
+    }
+
+    #[tokio::test]
+    async fn invite_surfaces_on_incoming_pipes() {
+        let st = make_state().await;
+        let mut rx = st.incoming_pipes();
+        let invite = PipeSignal::Invite(PipeInvite {
+            connection_id: vec![7; 32],
+            suite: PipeSuite::X25519Sealed,
+            handshake: vec![8; 32],
+            stream_type: "log".into(),
+            compress: vec![PipeCompress::None],
+            headers: BTreeMap::from([("k".into(), "v".into())]),
+        });
+        st.handle_pipe_signal(&[2u8; 32], &skald_relay_common::pipe::encode(&invite));
+        let got = rx.try_recv().expect("invite surfaced");
+        assert_eq!(got.from, [2u8; 32]);
+        assert_eq!(got.stream_type, "log");
+        assert_eq!(got.connection_id, [7u8; 32]);
+        assert_eq!(got.headers.get("k").map(String::as_str), Some("v"));
+    }
+
+    #[tokio::test]
+    async fn accept_resolves_the_waiter() {
+        let st = make_state().await;
+        let cid = [3u8; 32];
+        let rx = st.register_pipe_waiter(cid);
+        let accept = PipeSignal::Accept(PipeAccept {
+            connection_id: cid.to_vec(),
+            suite: PipeSuite::X25519Sealed,
+            handshake: vec![9; 32],
+            compress: PipeCompress::None,
+        });
+        st.handle_pipe_signal(&[2u8; 32], &skald_relay_common::pipe::encode(&accept));
+        let resolved = rx.await.expect("waiter not dropped");
+        assert_eq!(resolved.expect("accept ok").handshake, vec![9; 32]);
+    }
+
+    #[tokio::test]
+    async fn reject_resolves_waiter_with_reason() {
+        let st = make_state().await;
+        let cid = [4u8; 32];
+        let rx = st.register_pipe_waiter(cid);
+        let reject = PipeSignal::Reject(PipeReject { connection_id: cid.to_vec(), reason: "busy".into() });
+        st.handle_pipe_signal(&[2u8; 32], &skald_relay_common::pipe::encode(&reject));
+        assert_eq!(rx.await.expect("waiter").unwrap_err(), "busy");
+    }
+
+    #[tokio::test]
+    async fn unknown_connection_id_is_ignored() {
+        let st = make_state().await;
+        // An accept for a connection_id with no waiter must not panic.
+        let accept = PipeSignal::Accept(PipeAccept {
+            connection_id: vec![0xEE; 32],
+            suite: PipeSuite::X25519Sealed,
+            handshake: vec![0; 32],
+            compress: PipeCompress::None,
+        });
+        st.handle_pipe_signal(&[2u8; 32], &skald_relay_common::pipe::encode(&accept));
     }
 }

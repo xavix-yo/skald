@@ -141,6 +141,7 @@ Rules:
 | [crypto.md](crypto.md) | **Crypto contract**: seed, key derivation, ECDH, HKDF, AEAD, AAD, anti-replay, signatures | All implementors |
 | [relay-protocol.md](relay-protocol.md) | **WebSocket protocol**: protobuf transport, auth, pairing, message envelope, live channel, presence, errors, limits | Relay, plugin, app |
 | [framing.md](framing.md) | **E2E plaintext framing** `[version][comp][payload]` + optional zlib compression | Plugin, app |
+| [pipe.md](pipe.md) | **Relayed byte-stream** (TURN-style): control-plane signaling + `/v1/pipe` data plane, per-pipe ephemeral DH (PFS), splice + limits | Relay, relay client, app |
 | [payloads.md](payloads.md) | **E2E payload schemas** (the encrypted content the relay never sees) | Plugin, app |
 | [describe-and-push.md](describe-and-push.md) | **Approval rendering**: `summary` + structured `blocks`, push delivery model | Plugin, app |
 | [server.md](server.md) | **Relay server** implementation (Rust): zero-trust, store-and-forward, push bridge, deploy | Relay coding agent |
@@ -158,8 +159,9 @@ Rules:
 - **All** normative constants live in [crypto.md §1](crypto.md). No other file redefines them.
 - The WebSocket transport uses **protobuf binary frames** (`RelayFrame`, package `skald.relay.v2`)
   with raw bytes for all binary fields. The proto schema lives in `crates/skald-relay-common`.
-- E2E plaintext framing is versioned by the `version` byte (`0x01`), independently of the JSON
-  payload schema version (`v` field). See [framing.md](framing.md).
+- E2E plaintext framing is versioned by the `version` byte (`0x01` = JSON app payload, `0x02` = pipe
+  signaling), independently of the JSON payload schema version (`v` field). See [framing.md](framing.md).
+- The pipe data plane adds **one** endpoint, `/v1/pipe` (relayed byte-stream). See [pipe.md](pipe.md).
 
 ## 8. Links
 

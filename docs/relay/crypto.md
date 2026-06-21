@@ -25,9 +25,18 @@ All strings are ASCII/UTF-8, without NUL terminator unless noted as `\x00`.
 | `AUTH_DOMAIN` | `"skald-relay-auth-v1"` | Challenge-response signature (§8) |
 | `NONCE_DIR_AGENT_TO_CLIENT` | `0x00 0x00 0x00 0x01` | Nonce prefix, agent→client direction (§6) |
 | `NONCE_DIR_CLIENT_TO_AGENT` | `0x00 0x00 0x00 0x02` | Nonce prefix, client→agent direction (§6) |
+| `PIPE_AUTH_DOMAIN` | `"skald-pipe-auth-v1"` | Pipe data-plane challenge signature ([pipe.md §3.1](pipe.md)) |
+| `PIPE_KDF_SALT` | `"skald-pipe-v1"` | HKDF salt: ephemeral ECDH → per-pipe AES key ([pipe.md §4](pipe.md)) |
+| `PIPE_KDF_INFO` | `"pipe-aes-256-gcm"` | HKDF info, per-pipe AES key ([pipe.md §4](pipe.md)) |
+| `NONCE_DIR_PIPE_INITIATOR` | `0x00 0x00 0x00 0x03` | Nonce prefix, pipe initiator→responder ([pipe.md §4](pipe.md)) |
+| `NONCE_DIR_PIPE_RESPONDER` | `0x00 0x00 0x00 0x04` | Nonce prefix, pipe responder→initiator ([pipe.md §4](pipe.md)) |
 
 Algorithms: **X25519** (RFC 7748), **Ed25519** (RFC 8032), **HKDF-SHA256** (RFC 5869),
 **AES-256-GCM** (NIST SP 800-38D), **SHA-256** (FIPS 180-4).
+
+> The **pipe** (relayed byte-stream, [pipe.md](pipe.md)) reuses this entire suite — X25519 ECDH,
+> HKDF, AES-256-GCM with the `DIR ‖ counter` nonce (§6) — keyed by a **per-pipe ephemeral** DH
+> (Perfect Forward Secrecy), with `aad = connection_id`. No new primitives.
 
 ---
 

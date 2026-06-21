@@ -12,6 +12,55 @@
 
 use std::net::SocketAddr;
 
+use crate::limits::{
+    PIPE_IDLE_TIMEOUT_SECS, PIPE_MAX_BPS_DEFAULT, PIPE_MAX_FRAME_BYTES, PIPE_MAX_PER_NS,
+    PIPE_PENDING_TTL_SECS,
+};
+
+/// Tunables for the `/v1/pipe` data plane (docs/relay/pipe.md §2.3). Defaults in
+/// [`crate::limits`]; each is overridable via the matching `RELAY_PIPE_*` env var.
+#[derive(Debug, Clone)]
+pub struct PipeConfig {
+    /// Per-connection, per-direction bandwidth cap in bytes/sec. `0` = unlimited.
+    pub max_bps: u64,
+    /// Max concurrent pipes (pending + matched) per namespace.
+    pub max_per_ns: usize,
+    /// Half-open pending TTL (seconds).
+    pub pending_ttl_secs: u64,
+    /// Idle (no-bytes) timeout on a matched pipe (seconds).
+    pub idle_timeout_secs: u64,
+    /// Max data-plane WS frame size (bytes).
+    pub max_frame_bytes: usize,
+}
+
+impl Default for PipeConfig {
+    fn default() -> Self {
+        Self {
+            max_bps: PIPE_MAX_BPS_DEFAULT,
+            max_per_ns: PIPE_MAX_PER_NS,
+            pending_ttl_secs: PIPE_PENDING_TTL_SECS,
+            idle_timeout_secs: PIPE_IDLE_TIMEOUT_SECS,
+            max_frame_bytes: PIPE_MAX_FRAME_BYTES,
+        }
+    }
+}
+
+impl PipeConfig {
+    fn from_env() -> PipeConfig {
+        fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
+            std::env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+        }
+        let d = PipeConfig::default();
+        PipeConfig {
+            max_bps: env_parse("RELAY_PIPE_MAX_BPS", d.max_bps),
+            max_per_ns: env_parse("RELAY_PIPE_MAX_PER_NS", d.max_per_ns),
+            pending_ttl_secs: env_parse("RELAY_PIPE_PENDING_TTL_SECS", d.pending_ttl_secs),
+            idle_timeout_secs: env_parse("RELAY_PIPE_IDLE_TIMEOUT_SECS", d.idle_timeout_secs),
+            max_frame_bytes: env_parse("RELAY_PIPE_MAX_FRAME_BYTES", d.max_frame_bytes),
+        }
+    }
+}
+
 /// APNs configuration, populated from `config/apns-key.json` and env vars when
 /// the `push-live` cargo feature is on. The PEM is already newline-decoded by
 /// `serde_json` so it can be passed straight to `jsonwebtoken`.
@@ -32,6 +81,8 @@ pub struct ApnsConfig {
 pub struct Config {
     pub bind: SocketAddr,
     pub db_path: String,
+    /// Pipe data-plane tunables (docs/relay/pipe.md §2.3).
+    pub pipe: PipeConfig,
     /// `None` ⇒ the relay falls back to [`LogPusher`] (relay still boots).
     #[cfg(feature = "push-live")]
     pub apns: Option<ApnsConfig>,
@@ -53,6 +104,7 @@ impl Config {
         Config {
             bind,
             db_path,
+            pipe: PipeConfig::from_env(),
             #[cfg(feature = "push-live")]
             apns: ApnsConfig::load_from_env(),
         }

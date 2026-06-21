@@ -12,4 +12,5 @@
 //! interop vectors in test-vectors.md.
 
 pub mod crypto;
+pub mod pipe;
 pub mod proto;

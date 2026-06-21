@@ -14,6 +14,10 @@ license = "MIT"
 # --- serde / frames ---
 serde      = { version = "1", features = ["derive"] }
 serde_json = "1"
+# MsgPack wire format for the pipe control/data-plane messages (docs/relay/pipe.md).
+# `rmp-serde` keeps the same serde derives as the JSON path so a struct maps to
+# either format; the pipe layer is binary-first per the transport direction.
+rmp-serde  = "1"
 
 # --- crypto ---
 ed25519-dalek = "2"

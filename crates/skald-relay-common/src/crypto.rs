@@ -117,6 +117,14 @@ pub fn sign_challenge(signing_key: &SigningKey, challenge_nonce_raw: &[u8; 32]) 
         .to_bytes()
 }
 
+/// Plain SHA-256 of `data` (used e.g. for the pipe data-plane `dest =
+/// SHA256(peer_ed25519_pub)` cross-check, pipe.md §2.1).
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(data);
+    h.finalize().into()
+}
+
 /// Constant-time comparison of two tokens/secrets (relay.md §6: pairing_token).
 pub fn ct_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
@@ -176,6 +184,13 @@ pub fn derive_keys(seed: &[u8; 32]) -> DerivedKeys {
         x25519_priv,
         x25519_pub,
     }
+}
+
+/// X25519 public key from a raw 32-byte private scalar (clamping applied
+/// internally, consistent with [`ecdh`]). Used to derive a pipe ephemeral pubkey
+/// from a freshly-sampled private key (pipe.md §3).
+pub fn x25519_pubkey(x25519_priv: &[u8; 32]) -> [u8; 32] {
+    PublicKey::from(&StaticSecret::from(*x25519_priv)).to_bytes()
 }
 
 /// X25519 ECDH: compute the shared secret between `my_x25519_priv` and the
@@ -355,6 +370,97 @@ pub fn decompress_payload(plaintext: &[u8]) -> Result<Vec<u8>, FramingError> {
             Ok(out)
         }
         _ => Err(FramingError::BadComp),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pipe protocol crypto (docs/relay/pipe.md §3, §5). The data-plane auth reuses
+// the Ed25519 challenge primitive with its own domain; the secure channel
+// reuses ECDH + HKDF + AES-256-GCM, keyed by a *per-pipe ephemeral* DH (PFS).
+// ---------------------------------------------------------------------------
+
+/// Data-plane auth signing domain (pipe.md §2.1, `PIPE_AUTH_DOMAIN`).
+pub const PIPE_AUTH_DOMAIN: &[u8] = b"skald-pipe-auth-v1";
+/// HKDF salt for deriving the per-pipe AES key from the ephemeral ECDH secret.
+pub const PIPE_KDF_SALT: &[u8] = b"skald-pipe-v1";
+/// HKDF info for the per-pipe AES-256-GCM key.
+pub const PIPE_KDF_INFO: &[u8] = b"pipe-aes-256-gcm";
+
+/// Nonce direction prefix, pipe initiator → responder (pipe.md §3).
+pub const DIR_PIPE_INITIATOR: [u8; 4] = [0, 0, 0, 3];
+/// Nonce direction prefix, pipe responder → initiator (pipe.md §3).
+pub const DIR_PIPE_RESPONDER: [u8; 4] = [0, 0, 0, 4];
+
+/// Framing version byte marking a **pipe signaling** payload on the E2E channel:
+/// `0x02 ‖ comp(0x00) ‖ msgpack`. Distinct from [`FRAMING_VERSION`] (`0x01`,
+/// JSON app payloads) so the receiver can route by peeking the first byte
+/// *without* changing [`decompress_payload`] (which still rejects `0x02`).
+pub const FRAMING_VERSION_PIPE: u8 = 0x02;
+
+/// Derive the per-pipe AES-256-GCM key from the ephemeral ECDH shared secret.
+pub fn derive_pipe_key(eph_shared_secret: &[u8; 32]) -> [u8; 32] {
+    hkdf32(eph_shared_secret, PIPE_KDF_SALT, PIPE_KDF_INFO)
+}
+
+/// Build the data-plane auth message that is signed/verified (pipe.md §2.1):
+/// `PIPE_AUTH_DOMAIN ‖ 0x00 ‖ challenge_nonce(32B) ‖ connection_id(32B)`.
+pub fn pipe_auth_message(challenge_nonce: &[u8; 32], connection_id: &[u8; 32]) -> Vec<u8> {
+    let mut msg = Vec::with_capacity(PIPE_AUTH_DOMAIN.len() + 1 + 32 + 32);
+    msg.extend_from_slice(PIPE_AUTH_DOMAIN);
+    msg.push(0x00);
+    msg.extend_from_slice(challenge_nonce);
+    msg.extend_from_slice(connection_id);
+    msg
+}
+
+/// Sign the data-plane auth message with `signing_key`. Returns the 64B signature.
+pub fn sign_pipe_auth(
+    signing_key: &SigningKey,
+    challenge_nonce: &[u8; 32],
+    connection_id: &[u8; 32],
+) -> [u8; 64] {
+    signing_key
+        .sign(&pipe_auth_message(challenge_nonce, connection_id))
+        .to_bytes()
+}
+
+/// Verify the data-plane auth signature under `ed25519_pub` (uses `verify_strict`).
+pub fn verify_pipe_auth(
+    ed25519_pub: &[u8; 32],
+    challenge_nonce: &[u8; 32],
+    connection_id: &[u8; 32],
+    signature: &[u8; 64],
+) -> bool {
+    let Ok(vk) = VerifyingKey::from_bytes(ed25519_pub) else {
+        return false;
+    };
+    let sig = Signature::from_bytes(signature);
+    vk.verify_strict(&pipe_auth_message(challenge_nonce, connection_id), &sig)
+        .is_ok()
+}
+
+/// Wrap a MsgPack pipe-signaling payload in the reserved framing:
+/// `FRAMING_VERSION_PIPE ‖ COMP_NONE ‖ msgpack` (uncompressed; signaling is tiny).
+pub fn frame_pipe_signal(msgpack: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + msgpack.len());
+    out.push(FRAMING_VERSION_PIPE);
+    out.push(COMP_NONE);
+    out.extend_from_slice(msgpack);
+    out
+}
+
+/// `true` if a decrypted E2E plaintext is a pipe-signaling frame (vs a `0x01`
+/// app payload). A cheap first-byte peek used to route inbound messages.
+pub fn is_pipe_signal(framed: &[u8]) -> bool {
+    framed.first() == Some(&FRAMING_VERSION_PIPE)
+}
+
+/// Strip the pipe-signaling framing, returning the inner MsgPack body. `None`
+/// if the header is not exactly `FRAMING_VERSION_PIPE ‖ COMP_NONE`.
+pub fn unframe_pipe_signal(framed: &[u8]) -> Option<&[u8]> {
+    match framed.split_first_chunk::<2>() {
+        Some((&[FRAMING_VERSION_PIPE, COMP_NONE], body)) => Some(body),
+        _ => None,
     }
 }
 
@@ -568,5 +674,44 @@ mod tests {
         let big = vec![7u8; MAX_DECOMPRESSED_BYTES as usize];
         let framed = compress_payload(&big);
         assert_eq!(decompress_payload(&framed).unwrap(), big);
+    }
+
+    #[test]
+    fn pipe_auth_sign_verify_binds_nonce_and_connection() {
+        let sk = SigningKey::from_bytes(&[9u8; 32]);
+        let pk = sk.verifying_key().to_bytes();
+        let nonce = [0x11u8; 32];
+        let cid = [0x22u8; 32];
+
+        let sig = sign_pipe_auth(&sk, &nonce, &cid);
+        assert!(verify_pipe_auth(&pk, &nonce, &cid, &sig));
+        // Different nonce or connection_id → invalid (anti-replay / rebind).
+        assert!(!verify_pipe_auth(&pk, &[0x12u8; 32], &cid, &sig));
+        assert!(!verify_pipe_auth(&pk, &nonce, &[0x23u8; 32], &sig));
+        // Domain separation: an AUTH_DOMAIN signature must not verify here.
+        let auth_sig = sign_challenge(&sk, &nonce);
+        assert!(!verify_pipe_auth(&pk, &nonce, &cid, &auth_sig));
+    }
+
+    #[test]
+    fn pipe_key_is_symmetric_over_ephemeral_dh() {
+        // Two fresh ephemeral X25519 keypairs derive the same pipe key.
+        let a = derive_keys(&[1u8; 32]);
+        let b = derive_keys(&[2u8; 32]);
+        let ka = derive_pipe_key(&ecdh(&a.x25519_priv, &b.x25519_pub));
+        let kb = derive_pipe_key(&ecdh(&b.x25519_priv, &a.x25519_pub));
+        assert_eq!(ka, kb);
+    }
+
+    #[test]
+    fn pipe_signal_framing_round_trip() {
+        let body = b"\x82\xa1k\x01"; // arbitrary msgpack-ish bytes
+        let framed = frame_pipe_signal(body);
+        assert!(is_pipe_signal(&framed));
+        assert_eq!(unframe_pipe_signal(&framed), Some(&body[..]));
+        // A normal v2 app frame is NOT a pipe signal and won't unframe.
+        let app = compress_payload(b"{}");
+        assert!(!is_pipe_signal(&app));
+        assert_eq!(unframe_pipe_signal(&app), None);
     }
 }

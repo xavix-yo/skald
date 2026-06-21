@@ -7,6 +7,7 @@
 pub mod auth;
 pub mod config;
 pub mod limits;
+pub mod pipe;
 pub mod push;
 pub mod routing;
 pub mod store;
@@ -26,6 +27,7 @@ use axum::routing::get;
 
 use config::Config;
 use limits::{FixedWindow, IP_NEW_CONN_PER_MIN, TRANSPORT_FRAME_CAP, TTL_DAYS};
+use pipe::PipeRegistry;
 use push::{LogPusher, Pusher};
 use routing::Registry;
 use store::Store;
@@ -35,6 +37,8 @@ use store::Store;
 pub struct AppState {
     pub store: Store,
     pub registry: Arc<Registry>,
+    /// Stateful proxy registry for `/v1/pipe` (docs/relay/pipe.md §2).
+    pub pipes: Arc<PipeRegistry>,
     pub ip_limiter: Arc<FixedWindow<IpAddr>>,
     pub pusher: Arc<dyn Pusher>,
     conn_seq: Arc<AtomicU64>,
@@ -71,6 +75,7 @@ impl AppState {
         Ok(AppState {
             store,
             registry: Arc::new(Registry::new()),
+            pipes: Arc::new(PipeRegistry::new()),
             ip_limiter: Arc::new(FixedWindow::new(
                 Duration::from_secs(60),
                 IP_NEW_CONN_PER_MIN,
@@ -87,16 +92,35 @@ impl AppState {
     }
 }
 
-/// Build the axum router: `GET /healthz` and the WebSocket upgrade `GET /v1/ws`.
+/// Build the axum router: `GET /healthz`, the control WebSocket `GET /v1/ws`,
+/// and the data-plane pipe WebSocket `GET /v1/pipe` (docs/relay/pipe.md §2).
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/ws", get(ws_upgrade))
+        .route("/v1/pipe", get(pipe_upgrade))
         .with_state(state)
 }
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+/// `GET /v1/pipe` → data-plane WebSocket upgrade. Same per-IP new-connection
+/// quota as `/v1/ws`; the per-message cap is the pipe frame size (bulk transfer).
+async fn pipe_upgrade(
+    ws: WebSocketUpgrade,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<AppState>,
+) -> Response {
+    let ip = addr.ip();
+    if !state.ip_limiter.allow(&ip) {
+        tracing::warn!(%ip, "rate_limited: too many new pipe connections");
+        return (StatusCode::TOO_MANY_REQUESTS, "rate_limited").into_response();
+    }
+    let max_frame = state.cfg.pipe.max_frame_bytes;
+    ws.max_message_size(max_frame)
+        .on_upgrade(move |socket| pipe::handle_pipe_socket(socket, state, ip))
 }
 
 /// `GET /v1/ws` → WebSocket upgrade. Per-IP new-connection quota is enforced

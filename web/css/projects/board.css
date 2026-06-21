@@ -139,10 +139,18 @@
   font-size: 0.8rem;
   color: var(--bs-secondary-color);
   line-height: 1.45;
+  white-space: pre-wrap;
+  cursor: pointer;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.ticket-card-desc--expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
 }
 
 .ticket-card-meta {

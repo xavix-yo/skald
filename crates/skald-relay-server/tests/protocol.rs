@@ -57,6 +57,7 @@ async fn spawn_relay() -> SocketAddr {
     let cfg = Config {
         bind: "127.0.0.1:0".parse().expect("bind addr"),
         db_path: db.to_string_lossy().into(),
+        pipe: skald_relay_server::config::PipeConfig::default(),
     };
     let state = AppState::build(cfg).await.expect("build state");
 

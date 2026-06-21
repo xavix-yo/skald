@@ -45,6 +45,24 @@ pub const PAIRING_TTL_MAX: u64 = 600;
 pub const IP_NEW_CONN_PER_MIN: u32 = 30;
 pub const CONN_MSG_PER_MIN: u32 = 60;
 
+// ---------------------------------------------------------------------------
+// Pipe data plane (docs/relay/pipe.md §2.3). The relay becomes a stateful
+// connection proxy for `/v1/pipe`; these bound its resource use. All are
+// overridable via `RELAY_PIPE_*` env vars (see config.rs).
+// ---------------------------------------------------------------------------
+
+/// First side dialed, second never showed → reap the half-open pending.
+pub const PIPE_PENDING_TTL_SECS: u64 = 30;
+/// No bytes for this long on a matched pipe → close (reclaim dead pipes).
+pub const PIPE_IDLE_TIMEOUT_SECS: u64 = 120;
+/// Max concurrent matched/pending pipes per namespace.
+pub const PIPE_MAX_PER_NS: usize = 8;
+/// Max size of one data-plane WS binary frame (bulk transfer; separate from the
+/// message-channel caps).
+pub const PIPE_MAX_FRAME_BYTES: usize = 1024 * 1024;
+/// Per-connection bandwidth cap in bytes/sec, **per direction**. `0` = unlimited.
+pub const PIPE_MAX_BPS_DEFAULT: u64 = 0;
+
 /// Thread-safe fixed-window rate limiter, generic over the key.
 ///
 /// One `allow()` per event: returns `false` when the current window's quota is

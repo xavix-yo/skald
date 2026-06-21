@@ -124,6 +124,44 @@ impl RelayClient {
         self.state.send_to_client(dest, payload, live).await
     }
 
+    // ── Pipe (relayed byte-stream, docs/relay/pipe.md) ─────────────────────────
+
+    /// Open an end-to-end-encrypted byte pipe to `peer` (a namespace member).
+    /// Brokers the rendezvous over the E2E channel (`pipe_invite`/`pipe_accept`,
+    /// ephemeral DH → PFS) and returns the live data-plane channel.
+    pub async fn open_pipe(
+        &self,
+        peer: &[u8; 32],
+        stream_type: &str,
+        headers: std::collections::BTreeMap<String, String>,
+    ) -> Result<crate::pipe::PipeConnection> {
+        self.state.open_pipe(peer, stream_type, headers).await
+    }
+
+    /// Subscribe to inbound pipe invites (responder side). Each invite is an
+    /// [`IncomingPipe`](crate::pipe::IncomingPipe); call [`accept_pipe`](Self::accept_pipe)
+    /// or [`reject_pipe`](Self::reject_pipe) on it. Single-consumer expected.
+    pub fn incoming_pipes(&self) -> broadcast::Receiver<crate::pipe::IncomingPipe> {
+        self.state.incoming_pipes()
+    }
+
+    /// Accept an inbound invite → returns the live data-plane channel.
+    pub async fn accept_pipe(
+        &self,
+        incoming: &crate::pipe::IncomingPipe,
+    ) -> Result<crate::pipe::PipeConnection> {
+        self.state.accept_pipe(incoming).await
+    }
+
+    /// Decline an inbound invite.
+    pub async fn reject_pipe(
+        &self,
+        incoming: &crate::pipe::IncomingPipe,
+        reason: &str,
+    ) -> Result<()> {
+        self.state.reject_pipe(incoming, reason).await
+    }
+
     // ── Pairing ───────────────────────────────────────────────────────────────
 
     /// Open the pairing window (single-window, latest-wins). `ttl_secs == 0`

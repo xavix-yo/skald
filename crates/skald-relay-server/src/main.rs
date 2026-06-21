@@ -44,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
     spawn_gc(state.clone());
 
     let listener = tokio::net::TcpListener::bind(bind).await?;
-    tracing::info!(%bind, "relay listening on /v1/ws");
+    tracing::info!(%bind, "relay listening on /v1/ws + /v1/pipe");
 
     axum::serve(
         listener,

@@ -12,6 +12,7 @@ export class ProjectBoardSection extends LightElement {
     _saving:     { state: true },
     _error:      { state: true },
     _expanded:   { state: true },
+    _expandedDesc: { state: true },
     _agents:     { state: true },
     _groups:     { state: true },
     _activeTab:  { state: true },
@@ -26,6 +27,7 @@ export class ProjectBoardSection extends LightElement {
     this._saving     = false;
     this._error      = null;
     this._expanded   = null;
+    this._expandedDesc = {};
     this._pollTimer  = null;
     this._projectId  = null;
     this._agents     = [];
@@ -222,6 +224,10 @@ export class ProjectBoardSection extends LightElement {
     this._expanded = this._expanded === id ? null : id;
   }
 
+  _toggleDesc(id) {
+    this._expandedDesc = { ...this._expandedDesc, [id]: !this._expandedDesc[id] };
+  }
+
   // ── Rendering ─────────────────────────────────────────────────────────────────
 
   _renderTicketCard(ticket) {
@@ -246,10 +252,10 @@ export class ProjectBoardSection extends LightElement {
           ` : nothing}
         </div>
 
-        ${ticket.description
-          ? html`<div class="ticket-card-desc">${ticket.description}</div>`
+          ${ticket.description
+          ? html`<div class="ticket-card-desc ${this._expandedDesc[ticket.id] ? 'ticket-card-desc--expanded' : ''}"
+                 @click=${() => { if (!window.getSelection().toString()) this._toggleDesc(ticket.id); }}>${ticket.description}</div>`
           : nothing}
-
         <div class="ticket-card-meta">
           <span><i class="bi bi-person me-1"></i>${ticket.agent_id}</span>
           ${ticket.started_at ? html`
@@ -354,9 +360,8 @@ export class ProjectBoardSection extends LightElement {
 
   _renderModal() {
     return html`
-      <div class="agent-dialog-backdrop"
-           @click=${e => { if (e.target === e.currentTarget) this._modal = null; }}>
-        <div class="agent-dialog">
+      <div class="agent-dialog-backdrop">
+        <div class="agent-dialog agent-dialog--ticket">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:1rem">
             <i class="bi bi-card-text"></i>
             <span style="font-weight:600">New Ticket</span>

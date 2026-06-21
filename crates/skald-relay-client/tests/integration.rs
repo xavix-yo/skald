@@ -52,6 +52,7 @@ async fn spawn_relay() -> SocketAddr {
     let cfg = Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         db_path: db.to_string_lossy().into(),
+        pipe: skald_relay_server::config::PipeConfig::default(),
     };
     let state = AppState::build(cfg).await.expect("build relay state");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
