@@ -30,6 +30,17 @@ e.g. <img src=\"URL\" style=\"max-width:480px\">. \
 The URL returned by image_generate already points to the correct endpoint — use it as-is. \
 Do NOT append \".png\" or any extension to the URL.";
 
+const HELP_TEXT: &str = "\
+**Available commands**\n\n\
+**/clear** — start a new conversation\n\
+**/new** — alias for /clear\n\
+**/context** — show last turn's token usage\n\
+**/cost** — show total spend for this session (USD)\n\
+**/compact** — force context compaction\n\
+**/resetmcp** — remove all activated MCP tools from the session\n\
+**/sethome** — set web as the destination for agent notifications\n\
+**/help** — this message";
+
 // ── Upgrade ───────────────────────────────────────────────────────────────────
 
 pub async fn handler(
@@ -127,20 +138,10 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 if cmd == "/help" {
-                    let msg = "\
-**Available commands**\n\n\
-**/clear** — start a new conversation\n\
-**/new** — alias for /clear\n\
-**/context** — show last turn's token usage\n\
-**/compact** — force context compaction\n\
-**/resetmcp** — remove all activated MCP tools from the session\n\
-**/sethome** — set web as the destination for agent notifications\n\
-**/help** — this message"
-                        .to_string();
                     let _ = socket.send(to_msg(&ServerEvent::Done {
                         message_id:    0,
                         stack_id:      0,
-                        content:       msg,
+                        content:       HELP_TEXT.to_string(),
                         input_tokens:  None,
                         output_tokens: None,
                     })).await;
@@ -156,6 +157,33 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                                 message_id:    0,
                                 stack_id:      0,
                                 content:       format!("↑{input_str} tok · ↓{output_str} tok"),
+                                input_tokens:  None,
+                                output_tokens: None,
+                            })).await;
+                        }
+                        Err(e) => {
+                            let _ = socket.send(to_msg(&ServerEvent::Error { message: e.to_string() })).await;
+                        }
+                    }
+                    continue;
+                }
+
+                if cmd == "/cost" {
+                    match skald.chat_hub.cost_info(&source).await {
+                        Ok(Some(c)) => {
+                            let _ = socket.send(to_msg(&ServerEvent::Done {
+                                message_id:    0,
+                                stack_id:      0,
+                                content:       format!("💰 Costo sessione: ${c:.4}"),
+                                input_tokens:  None,
+                                output_tokens: None,
+                            })).await;
+                        }
+                        Ok(None) => {
+                            let _ = socket.send(to_msg(&ServerEvent::Done {
+                                message_id:    0,
+                                stack_id:      0,
+                                content:       "💰 Nessun costo registrato per questa sessione.".to_string(),
                                 input_tokens:  None,
                                 output_tokens: None,
                             })).await;
@@ -209,6 +237,21 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                             let _ = socket.send(to_msg(&ServerEvent::Error { message: e.to_string() })).await;
                         }
                     }
+                    continue;
+                }
+
+                // ── Unknown command ───────────────────────────────────────────
+                // Any other `/...` prompt is an unrecognised command — never
+                // forward it to the LLM. Reply with a not-found notice + help.
+                if cmd.starts_with('/') {
+                    let first = cmd.split_whitespace().next().unwrap_or(cmd);
+                    let _ = socket.send(to_msg(&ServerEvent::Done {
+                        message_id:    0,
+                        stack_id:      0,
+                        content:       format!("Unknown command: {first}\n\n{HELP_TEXT}"),
+                        input_tokens:  None,
+                        output_tokens: None,
+                    })).await;
                     continue;
                 }
 

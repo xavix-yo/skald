@@ -16,6 +16,7 @@
 
 mod agent;
 mod app;
+mod notifier;
 mod payloads;
 mod router;
 mod tools;
@@ -38,10 +39,13 @@ pub use agent::{ClientInfo, ClientState, PairingHandle, RelayAgent};
 pub use tools::mobile_tools;
 
 use app::RelayApp;
+use notifier::{DelayedNotifier, Kind};
 
 pub(crate) const PLUGIN_ID: &str = "mobile-connector";
 const DEFAULT_TTL: u32 = 300;
 const MAX_TTL: u32 = 600;
+/// Default debounce before an unresolved Inbox item is pushed to the phone.
+const DEFAULT_NOTIFY_DELAY_SECS: u64 = 20;
 /// Seed file path (relative to the process working dir). Kept byte-identical to
 /// the historical location so existing identities/devices survive the upgrade.
 const SEED_PATH: &str = "data/relay/seed";
@@ -55,6 +59,8 @@ pub struct MobileConnectorPlugin {
     inner: Arc<Mutex<Option<Arc<RelayApp>>>>,
     cancel: Mutex<Option<CancellationToken>>,
     handles: Mutex<Vec<JoinHandle<()>>>,
+    /// Debounces Inbox pushes to the phone; present only while running.
+    notifier: Mutex<Option<Arc<DelayedNotifier>>>,
 }
 
 impl MobileConnectorPlugin {
@@ -64,6 +70,7 @@ impl MobileConnectorPlugin {
             inner: Arc::new(Mutex::new(None)),
             cancel: Mutex::new(None),
             handles: Mutex::new(Vec::new()),
+            notifier: Mutex::new(None),
         }
     }
 
@@ -86,6 +93,11 @@ impl MobileConnectorPlugin {
         let require_device_confirmation = config["require_device_confirmation"]
             .as_bool()
             .unwrap_or(true);
+        let notify_delay = std::time::Duration::from_secs(
+            config["notify_delay_secs"]
+                .as_u64()
+                .unwrap_or(DEFAULT_NOTIFY_DELAY_SECS),
+        );
 
         // Build the transport client (derives identity, inits the DB table).
         let client = Arc::new(
@@ -112,6 +124,8 @@ impl MobileConnectorPlugin {
             require_device_confirmation,
         ));
 
+        let notifier = DelayedNotifier::new(Arc::clone(&app), notify_delay);
+
         let cancel = CancellationToken::new();
         let mut handles = Vec::new();
 
@@ -125,9 +139,11 @@ impl MobileConnectorPlugin {
             }));
         }
 
-        // Bus subscriber: re-snapshot the Inbox on the four Inbox events.
+        // Bus subscriber: route the four Inbox events through the debouncer.
+        // `*Requested` arms a delayed push; `*Resolved` cancels it (or refreshes
+        // the phone if the push already went out).
         {
-            let app2 = Arc::clone(&app);
+            let notifier = Arc::clone(&notifier);
             let c = cancel.clone();
             let mut rx = ctx.chat_hub.events(PLUGIN_ID);
             handles.push(tokio::spawn(async move {
@@ -136,17 +152,21 @@ impl MobileConnectorPlugin {
                     tokio::select! {
                         _ = c.cancelled() => break,
                         ev = rx.recv() => match ev {
-                            Ok(ge) => {
-                                if matches!(
-                                    ge.event,
-                                    ApprovalRequested { .. }
-                                        | ApprovalResolved { .. }
-                                        | ClarificationRequested { .. }
-                                        | ClarificationResolved { .. }
-                                ) && let Err(e) = app2.broadcast_inbox().await {
-                                    warn!(plugin = PLUGIN_ID, error = %e, "inbox broadcast failed");
+                            Ok(ge) => match ge.event {
+                                ApprovalRequested { request_id, .. } => {
+                                    notifier.on_requested((Kind::Approval, request_id)).await;
                                 }
-                            }
+                                ApprovalResolved { request_id, .. } => {
+                                    notifier.on_resolved((Kind::Approval, request_id)).await;
+                                }
+                                ClarificationRequested { request_id, .. } => {
+                                    notifier.on_requested((Kind::Clarification, request_id)).await;
+                                }
+                                ClarificationResolved { request_id } => {
+                                    notifier.on_resolved((Kind::Clarification, request_id)).await;
+                                }
+                                _ => {}
+                            },
                             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                                 warn!(plugin = PLUGIN_ID, skipped = n, "event bus lagged");
                             }
@@ -157,6 +177,7 @@ impl MobileConnectorPlugin {
             }));
         }
 
+        *self.notifier.lock().await = Some(notifier);
         *self.inner.lock().await = Some(app);
         *self.cancel.lock().await = Some(cancel);
         *self.handles.lock().await = handles;
@@ -168,6 +189,10 @@ impl MobileConnectorPlugin {
     async fn stop_inner(&self) {
         if let Some(c) = self.cancel.lock().await.take() {
             c.cancel();
+        }
+        // Cancel any armed (not-yet-fired) push timers.
+        if let Some(notifier) = self.notifier.lock().await.take() {
+            notifier.cancel_all().await;
         }
         // Shut down the transport (cancels + joins the WS loop) before dropping
         // the app.
@@ -219,6 +244,13 @@ impl Plugin for MobileConnectorPlugin {
                     "default": true,
                     "title": "Require device confirmation",
                     "description": "Require manual confirmation before a newly paired device is authorized (recommended).",
+                },
+                "notify_delay_secs": {
+                    "type": "integer",
+                    "default": DEFAULT_NOTIFY_DELAY_SECS,
+                    "minimum": 0,
+                    "title": "Notification delay (seconds)",
+                    "description": "Wait this long before pushing an approval/clarification to the phone. If you answer on the computer within the window, no phone notification is sent. Set 0 to push immediately.",
                 }
             }
         })

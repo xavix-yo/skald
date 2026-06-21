@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -75,6 +76,9 @@ impl WebServer {
         for (id, plugin_router) in plugin_routers {
             router = router.nest(&format!("/api/plugin/{id}"), plugin_router);
         }
+        // Serve the data/ directory under /data/ (accessible via URL).
+        let data_dir = Path::new(static_dir).parent().unwrap_or(Path::new(".")).join("data");
+        router = router.nest_service("/data", ServeDir::new(&data_dir));
         router.fallback_service(ServeDir::new(static_dir))
     }
 }

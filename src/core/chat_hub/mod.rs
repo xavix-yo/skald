@@ -229,6 +229,14 @@ impl ChatHub {
         Ok(last.map_or((None, None), |m| (m.input_tokens, m.output_tokens)))
     }
 
+    /// Total spend (USD) of the source's active session, including synchronous
+    /// sub-agent frames and excluding asynchronous tasks (which run in their own
+    /// session). `None` when no provider reported a cost.
+    pub async fn cost_info(&self, source_id: &str) -> anyhow::Result<Option<f64>> {
+        let session_id = self.get_or_create_session(source_id, "main").await?;
+        chat_history::total_cost_for_session(&self.db, session_id).await
+    }
+
     /// Force compaction of the source's active session history.
     /// Bypasses the token threshold; returns `true` if compaction occurred.
     pub async fn force_compact(&self, source_id: &str) -> anyhow::Result<bool> {
@@ -463,6 +471,10 @@ impl ChatHubApi for ChatHub {
 
     async fn context_info(&self, source_id: &str) -> anyhow::Result<(Option<i64>, Option<i64>)> {
         self.context_info(source_id).await
+    }
+
+    async fn cost_info(&self, source_id: &str) -> anyhow::Result<Option<f64>> {
+        self.cost_info(source_id).await
     }
 
     async fn force_compact(&self, source_id: &str) -> anyhow::Result<bool> {

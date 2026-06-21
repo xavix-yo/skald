@@ -81,10 +81,12 @@ This means there is no restart needed after editing the file — authorization t
 | `/new` or `/clear` | Create a new chat session (clears LLM context) |
 | `/stop` | Interrupt the agent mid-turn (clears pending approvals and clarifications) |
 | `/context` | Show last turn's token usage (`↑X tok · ↓Y tok`) |
+| `/cost` | Show total spend for this session in USD (sync sub-agents included; async tasks excluded) |
 | `/compact` | Force context compaction (bypasses the token threshold) |
 | `/resetmcp` | Remove all activated MCP tools from the session |
 | `/sethome` | Set Telegram as the home source for background notifications |
 | `/help` | Show available commands |
+| any other `/command` | Unknown — replies with a "Unknown command" notice + the help list, never forwarded to the LLM |
 | any text | Forwarded to the LLM agent |
 
 ---

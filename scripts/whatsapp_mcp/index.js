@@ -24,6 +24,7 @@ const readline = require('readline');
 // __dirname = <project>/scripts/whatsapp_mcp  →  root = ../..
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const SECRETS_DIR  = path.join(PROJECT_ROOT, 'secrets');
+const DATA_DIR     = path.join(PROJECT_ROOT, 'data');
 const SESSION_DIR  = path.join(SECRETS_DIR, 'whatsapp_session');
 const QR_FILE      = path.join(SECRETS_DIR, 'whatsapp_qr.txt');
 
@@ -102,6 +103,11 @@ img{border:12px solid white;border-radius:8px;}</style></head>
 </html>`;
       fs.writeFileSync(QR_HTML, html, 'utf8');
       log(`QR code saved → open in browser: ${QR_HTML}`);
+
+      // Also save a standalone PNG for direct access via HTTP / local file.
+      const pngPath = path.join(DATA_DIR, 'whatsapp_qr.png');
+      await qrcode.toFile(pngPath, qr, { width: 300, margin: 2 });
+      log(`QR PNG saved → ${pngPath}`);
     } catch (e) {
       // Fallback: ASCII art text file
       try {
@@ -121,8 +127,10 @@ img{border:12px solid white;border-radius:8px;}</style></head>
     state = 'AUTHENTICATED';
     lastQrStr = null;
     const QR_HTML = path.join(SECRETS_DIR, 'whatsapp_qr.html');
+    const QR_PNG  = path.join(DATA_DIR, 'whatsapp_qr.png');
     if (fs.existsSync(QR_FILE))  fs.unlinkSync(QR_FILE);
     if (fs.existsSync(QR_HTML))  fs.unlinkSync(QR_HTML);
+    if (fs.existsSync(QR_PNG))   fs.unlinkSync(QR_PNG);
     log('Authenticated successfully');
   });
 
@@ -201,6 +209,15 @@ async function toolStatus() {
 async function toolGetQr() {
   if (state === 'READY' || state === 'AUTHENTICATED') {
     return 'Already authenticated. No QR code needed.';
+  }
+  const QR_PNG = path.join(DATA_DIR, 'whatsapp_qr.png');
+  if (fs.existsSync(QR_PNG)) {
+    return `QR code ready.
+• Local file: ${QR_PNG}
+• URL: /data/whatsapp_qr.png
+Open the URL in your browser or scan locally.
+
+Current status: ${state}`;
   }
   const QR_HTML = path.join(SECRETS_DIR, 'whatsapp_qr.html');
   if (fs.existsSync(QR_HTML)) {
@@ -496,6 +513,9 @@ async function main() {
 
   if (!fs.existsSync(SECRETS_DIR)) {
     fs.mkdirSync(SECRETS_DIR, { recursive: true });
+  }
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 
   initClient();

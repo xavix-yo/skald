@@ -69,6 +69,11 @@ pub trait ChatHubApi: Send + Sync {
         source_id: &str,
     ) -> anyhow::Result<(Option<i64>, Option<i64>)>;
 
+    /// Total spend (USD) of the source's active session, including synchronous
+    /// sub-agent frames and excluding asynchronous tasks (which run in their own
+    /// session). `None` when no provider reported a cost.
+    async fn cost_info(&self, source_id: &str) -> anyhow::Result<Option<f64>>;
+
     /// Force compaction of the source's active session history.
     /// Returns `true` if compaction occurred.
     async fn force_compact(&self, source_id: &str) -> anyhow::Result<bool>;

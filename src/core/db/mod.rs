@@ -86,6 +86,7 @@ async fn create_tables(pool: &SqlitePool) -> Result<()> {
             model_db_id      INTEGER REFERENCES llm_models(id),
             is_synthetic     INTEGER NOT NULL DEFAULT 0,
             reasoning_content TEXT,
+            cost             REAL,
             created_at       TEXT    NOT NULL DEFAULT (datetime('now'))
         )",
     )
@@ -713,6 +714,19 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO config(key, value, updated_at)
              VALUES('schema_version', '13', datetime('now'))",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    if version < 14 {
+        // Per-request cost in USD, reported by providers that bill per-call
+        // (OpenRouter returns it under usage.cost). NULL for providers that don't.
+        sqlx::query("ALTER TABLE chat_history ADD COLUMN cost REAL")
+            .execute(pool).await.ok();
+        sqlx::query(
+            "INSERT OR REPLACE INTO config(key, value, updated_at)
+             VALUES('schema_version', '14', datetime('now'))",
         )
         .execute(pool)
         .await?;

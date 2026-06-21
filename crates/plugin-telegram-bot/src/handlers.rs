@@ -12,6 +12,18 @@ use super::TgShared;
 use super::attachments::TelegramAttachment;
 use super::auth::{handle_pairing, load_wl};
 
+// ── Available commands help text (shared by /help and unknown-command replies) ──
+const HELP_TEXT: &str = "<b>Available commands</b>\n\n\
+     /clear — start a new conversation\n\
+     /new — alias for /clear\n\
+     /stop — interrupt the agent mid-turn\n\
+     /context — show last turn's token usage\n\
+     /cost — show total spend for this session (USD)\n\
+     /compact — force context compaction\n\
+     /resetmcp — remove all activated MCP tools from the session\n\
+     /sethome — receive agent notifications here\n\
+     /help — this message";
+
 // ── Incoming message classification ───────────────────────────────────────────
 //
 // To add a new media type: add a variant to IncomingEvent, handle it in
@@ -123,21 +135,10 @@ pub(crate) async fn message_handler(
             }
         }
         IncomingEvent::Command { ref name, .. } if name == "help" => {
-            bot.send_message(
-                chat_id,
-                "<b>Available commands</b>\n\n\
-                 /clear — start a new conversation\n\
-                 /new — alias for /clear\n\
-                 /stop — interrupt the agent mid-turn\n\
-                 /context — show last turn's token usage\n\
-                 /compact — force context compaction\n\
-                 /resetmcp — remove all activated MCP tools from the session\n\
-                 /sethome — receive agent notifications here\n\
-                 /help — this message",
-            )
-            .parse_mode(ParseMode::Html)
-            .await
-            .ok();
+            bot.send_message(chat_id, HELP_TEXT)
+                .parse_mode(ParseMode::Html)
+                .await
+                .ok();
         }
         IncomingEvent::Command { ref name, .. } if name == "stop" => {
             handle_stop(&bot, chat_id, &shared).await;
@@ -145,11 +146,24 @@ pub(crate) async fn message_handler(
         IncomingEvent::Command { ref name, .. } if name == "context" => {
             handle_context(&bot, chat_id, &shared).await;
         }
+        IncomingEvent::Command { ref name, .. } if name == "cost" => {
+            handle_cost(&bot, chat_id, &shared).await;
+        }
         IncomingEvent::Command { ref name, .. } if name == "compact" => {
             handle_compact(&bot, chat_id, &shared).await;
         }
         IncomingEvent::Command { ref name, .. } if name == "resetmcp" => {
             handle_reset_mcp(&bot, chat_id, &shared).await;
+        }
+        // Any other command is unknown — never forward a `/...` prompt to the LLM.
+        IncomingEvent::Command { ref name, .. } => {
+            bot.send_message(
+                chat_id,
+                format!("Unknown command: /{name}\n\n{HELP_TEXT}"),
+            )
+            .parse_mode(ParseMode::Html)
+            .await
+            .ok();
         }
         IncomingEvent::Voice { file_id } => {
             handle_voice(&bot, chat_id, file_id, &shared).await;
@@ -160,10 +174,9 @@ pub(crate) async fn message_handler(
         _ => {
             let text = match &incoming {
                 IncomingEvent::Text(t) => t.clone(),
-                IncomingEvent::Command { name, args } => {
-                    if args.is_empty() { format!("/{name}") } else { format!("/{name} {}", args.join(" ")) }
-                }
-                IncomingEvent::Voice { .. } | IncomingEvent::Attachment(_) => unreachable!(),
+                IncomingEvent::Command { .. }
+                | IncomingEvent::Voice { .. }
+                | IncomingEvent::Attachment(_) => unreachable!(),
             };
 
             // If a clarification question is pending, treat any text as the answer.
@@ -224,6 +237,22 @@ async fn handle_context(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
             .parse_mode(ParseMode::Html)
             .await
             .ok();
+        }
+        Err(e) => {
+            bot.send_message(chat_id, format!("⚠️ Error: {e}")).await.ok();
+        }
+    }
+}
+
+// ── /cost command ─────────────────────────────────────────────────────────────
+
+async fn handle_cost(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
+    match shared.chat_hub.cost_info("telegram").await {
+        Ok(Some(c)) => {
+            bot.send_message(chat_id, format!("💰 Session cost: ${c:.4}")).await.ok();
+        }
+        Ok(None) => {
+            bot.send_message(chat_id, "💰 No cost recorded for this session.").await.ok();
         }
         Err(e) => {
             bot.send_message(chat_id, format!("⚠️ Error: {e}")).await.ok();

@@ -323,7 +323,10 @@ impl ChatSessionHandler {
                     tool_call_id: tc.id,
                     result: "Riavvio avviato.".to_string(),
                 }).await.ok();
-                std::process::exit(-1);
+                // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
+                // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
+                // instead of 255 — breaking the run.sh restart supervisor).
+                unsafe { libc::_exit(-1) }
             }
 
             // Execute the tool — check memory tools first, then registry.

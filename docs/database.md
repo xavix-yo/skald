@@ -63,6 +63,7 @@ Represents one agent call frame. Root frames have `depth=0`; sub-agent frames in
 | `model_db_id` | INTEGER | nullable REFERENCES `llm_models(id)` |
 | `is_synthetic` | INTEGER | NOT NULL DEFAULT `0` — `1` when the message was system-generated |
 | `reasoning_content` | TEXT | nullable — chain-of-thought from reasoning models |
+| `cost` | REAL | nullable — turn cost in USD, when the provider reports it (OpenRouter `usage.cost`) |
 | `created_at` | TEXT | NOT NULL |
 
 - `role = 'agent'` is a sub-agent prompt message; sent as `user` to the LLM but hidden in the UI
@@ -70,6 +71,7 @@ Represents one agent call frame. Root frames have `depth=0`; sub-agent frames in
 - `model_db_id` is set only on `role = 'assistant'` rows; `null` for user/agent messages and for rows created before this column was added
 - `is_synthetic = 1` marks messages injected by the system (ChatHub notification assistant messages with tool-call injection, or legacy synthetic user turns). They are included in the LLM context but excluded from the UI history (not shown on page reload). Currently used for `role = 'assistant'` rows that carry the synthetic `read_notification` tool call and reasoning trace.
 - `reasoning_content` is populated only for `role = 'assistant'` rows from providers that return chain-of-thought (currently DeepSeek thinking mode); echoed back in the assistant message on subsequent turns
+- `cost` is set on `role = 'assistant'` rows only when the provider returns a per-request price (OpenRouter exposes it under `usage.cost`); `null` for providers that don't bill per-call. Extracted via the `ChatbotClient::extract_cost` trait method (see [llm-clients.md](llm-clients.md))
 
 Index: `idx_history_stack ON chat_history(session_stack_id)`
 
@@ -492,6 +494,8 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
 | 10 | `chat_sessions` + `scheduled_jobs`: renamed `run_context_id` → `run_context` (now a `RunContext` JSON blob instead of a plain group-id string); existing values cleared to NULL |
 | 11 | New tables `projects`, `project_tickets`; `scheduled_jobs`: added `origin_ref TEXT` for post-completion callbacks |
 | 12 | `projects`: dropped `agent_id` column (agent is a ticket-level concern, not project-level) |
+| 13 | Reassigned legacy `agent_id` values in `scheduled_jobs` + `chat_sessions_stack` to renamed agent ids (e.g. `engineer`→`software-engineer`, `worker`/`tinker`→`generalist`) |
+| 14 | `chat_history`: added `cost REAL` — per-request price in USD reported by the provider (OpenRouter `usage.cost`) |
 
 ---
 

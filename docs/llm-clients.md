@@ -42,9 +42,11 @@ A background task (boot + every hour) deletes rows older than `retention_days` (
 `LlmTurn` return variants:
 
 - `Message(ChatResponse)` — final text answer
-- `ToolCalls { content, calls, input_tokens, output_tokens, reasoning_content }` — one or more tool calls requested
+- `ToolCalls { content, calls, input_tokens, output_tokens, reasoning_content, cost }` — one or more tool calls requested
 
 Both variants carry an optional `reasoning_content: Option<String>`. Populated only by providers that return chain-of-thought (currently DeepSeek thinking mode). Saved to `chat_history.reasoning_content` and echoed back on subsequent turns — see *Reasoning Content / DeepSeek Thinking Mode* below.
+
+Both variants also carry an optional `cost: Option<f64>` — the request price in USD. Populated via the `ChatbotClient::extract_cost(&self, response: &Value)` trait method, whose default reads `usage.cost` from the raw JSON response (OpenRouter and other OpenAI-compatible gateways report it there). Providers that don't bill per-request leave it `None`. `llm_loop` persists it to `chat_history.cost`. Providers with a different response shape can override `extract_cost`.
 
 ---
 

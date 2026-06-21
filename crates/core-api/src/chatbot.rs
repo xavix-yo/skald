@@ -69,6 +69,10 @@ pub struct ChatResponse {
     /// Tokens written into the provider's prompt cache (Anthropic only:
     /// cache_creation_input_tokens). None for providers that do not expose this.
     pub cache_creation_tokens: Option<u32>,
+    /// Cost of the request in USD, when the provider reports it (OpenRouter
+    /// returns it under `usage.cost`). None for providers that do not bill
+    /// per-request or do not expose the figure.
+    pub cost:                  Option<f64>,
 }
 
 /// A single tool call requested by the LLM.
@@ -91,6 +95,7 @@ pub enum LlmTurn {
         reasoning_content:     Option<String>,
         cache_read_tokens:     Option<u32>,
         cache_creation_tokens: Option<u32>,
+        cost:                  Option<f64>,
     },
 }
 
@@ -103,6 +108,14 @@ pub trait ChatbotClient: Send + Sync {
         messages: &[Message],
         options:  &ChatOptions,
     ) -> anyhow::Result<ChatResponse>;
+
+    /// Extracts the request cost in USD from a provider's raw JSON response,
+    /// when the provider reports it. OpenRouter (and other OpenAI-compatible
+    /// gateways) return it under `usage.cost`; the default reads that path and
+    /// yields None when absent. Providers with a different shape override this.
+    fn extract_cost(&self, response: &Value) -> Option<f64> {
+        response["usage"]["cost"].as_f64()
+    }
 
     /// Chat with tool support. Default implementation ignores tools and falls
     /// back to `chat()`.

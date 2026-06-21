@@ -195,7 +195,8 @@ impl ChatbotClient for AnthropicClient {
         let cache_creation_tokens = resp["usage"]["cache_creation_input_tokens"].as_u64().map(|n| n as u32);
         info!(model = %options.model, ?input_tokens, ?output_tokens, "anthropic: chat response received");
 
-        Ok(ChatResponse { content, input_tokens, output_tokens, truncated: false, reasoning_content: None, cache_read_tokens, cache_creation_tokens })
+        let cost = self.extract_cost(&resp);
+        Ok(ChatResponse { content, input_tokens, output_tokens, truncated: false, reasoning_content: None, cache_read_tokens, cache_creation_tokens, cost })
     }
 
     async fn chat_with_tools(
@@ -284,6 +285,7 @@ impl ChatbotClient for AnthropicClient {
         let cache_read_tokens     = resp["usage"]["cache_read_input_tokens"].as_u64().map(|n| n as u32);
         let cache_creation_tokens = resp["usage"]["cache_creation_input_tokens"].as_u64().map(|n| n as u32);
         let content_blocks        = resp["content"].as_array().cloned().unwrap_or_default();
+        let cost                  = self.extract_cost(&resp);
         info!(model = %options.model, ?input_tokens, ?output_tokens, stop_reason, "anthropic: chat_with_tools response received");
         if stop_reason == "max_tokens" {
             warn!(model = %options.model, ?output_tokens, "anthropic: response truncated (max_tokens reached)");
@@ -311,7 +313,7 @@ impl ChatbotClient for AnthropicClient {
                 })
                 .collect();
 
-            LlmTurn::ToolCalls { content: text, calls, input_tokens, output_tokens, reasoning_content: None, cache_read_tokens, cache_creation_tokens }
+            LlmTurn::ToolCalls { content: text, calls, input_tokens, output_tokens, reasoning_content: None, cache_read_tokens, cache_creation_tokens, cost }
         } else {
             let content = content_blocks
                 .iter()
@@ -321,7 +323,7 @@ impl ChatbotClient for AnthropicClient {
                 .to_string();
 
             let truncated = stop_reason == "max_tokens";
-            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content: None, cache_read_tokens, cache_creation_tokens })
+            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content: None, cache_read_tokens, cache_creation_tokens, cost })
         };
 
         Ok((turn, Some(raw_meta)))

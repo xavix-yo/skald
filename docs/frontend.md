@@ -76,11 +76,14 @@ The web copilot supports the following slash commands, intercepted server-side i
 | `/new` | Create a new chat session (handled client-side, clears context) |
 | `/help` | Show available commands |
 | `/context` | Show last turn's token usage (`↑X tok · ↓Y tok`) |
+| `/cost` | Show total spend for this session in USD (sync sub-agents included; async tasks excluded). `None` → "no cost recorded" when the provider does not report pricing |
 | `/compact` | Force context compaction (bypasses the token threshold) |
 | `/resetmcp` | Remove all activated MCP tools from the session |
 | `/sethome` | Set web as the home source for background notifications |
 
-Unknown commands are forwarded to the LLM as regular text.
+Any other message starting with `/` is treated as an unknown command: the server
+replies with an "Unknown command" notice followed by the help list, and never
+forwards it to the LLM.
 
 ---
 

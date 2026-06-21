@@ -102,9 +102,10 @@ impl ChatbotClient for OpenAiClient {
         let output_tokens     = resp["usage"]["completion_tokens"].as_u64().map(|n| n as u32);
         let cache_read_tokens = resp["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().map(|n| n as u32);
         let truncated         = resp["choices"][0]["finish_reason"].as_str() == Some("length");
-        info!(model = %options.model, ?input_tokens, ?output_tokens, truncated, "openai: chat response received");
+        let cost              = self.extract_cost(&resp);
+        info!(model = %options.model, ?input_tokens, ?output_tokens, ?cost, truncated, "openai: chat response received");
 
-        Ok(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content: None, cache_read_tokens, cache_creation_tokens: None })
+        Ok(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content: None, cache_read_tokens, cache_creation_tokens: None, cost })
     }
 
     async fn chat_with_tools(
@@ -195,6 +196,7 @@ impl ChatbotClient for OpenAiClient {
         let input_tokens      = resp["usage"]["prompt_tokens"].as_u64().map(|n| n as u32);
         let output_tokens     = resp["usage"]["completion_tokens"].as_u64().map(|n| n as u32);
         let cache_read_tokens = resp["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().map(|n| n as u32);
+        let cost              = self.extract_cost(&resp);
 
         let choice  = &resp["choices"][0];
         let message = &choice["message"];
@@ -233,7 +235,7 @@ impl ChatbotClient for OpenAiClient {
                 })
                 .collect();
 
-            LlmTurn::ToolCalls { content, calls, input_tokens, output_tokens, reasoning_content, cache_read_tokens, cache_creation_tokens: None }
+            LlmTurn::ToolCalls { content, calls, input_tokens, output_tokens, reasoning_content, cache_read_tokens, cache_creation_tokens: None, cost }
         } else {
             // content can be null for thinking/reasoning models or when finish_reason="length".
             // Fall back to empty string rather than erroring — the partial response is still
@@ -252,7 +254,7 @@ impl ChatbotClient for OpenAiClient {
                 }
             };
             let truncated = finish == "length";
-            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content, cache_read_tokens, cache_creation_tokens: None })
+            LlmTurn::Message(ChatResponse { content, input_tokens, output_tokens, truncated, reasoning_content, cache_read_tokens, cache_creation_tokens: None, cost })
         };
 
         Ok((turn, Some(raw_meta)))

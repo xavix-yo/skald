@@ -57,6 +57,8 @@ struct PersonalAgentMeta {
     negative_prompt_field_extra: Option<Vec<String>>,
     #[serde(default)]
     extra_params:                ExtraParamNodeMap,
+    #[serde(default)]
+    input_image_node:            Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -82,13 +84,14 @@ pub struct ComfyUiWorkflowGenerator {
     description:                Option<String>,
     extra_params_schema:        Option<Value>,
     workflow_path:              PathBuf,
-    prompt_node:                String,
+    prompt_node:                Option<String>,
     negative_prompt_node:       Option<String>,
     prompt_field:               Option<String>,
     prompt_field_extra:         Option<Vec<String>>,
     negative_prompt_field:      Option<String>,
     negative_prompt_field_extra: Option<Vec<String>>,
     extra_param_nodes:          ExtraParamNodeMap,
+    input_image_node:           Option<String>,
     default_negative:           String,
     base_url:                   String,
     http:                       Arc<reqwest::Client>,
@@ -114,9 +117,16 @@ impl ComfyUiWorkflowGenerator {
 
         let name = meta.name.unwrap_or_else(|| stem.to_string());
 
+        // Require either a prompt node or an input image node (or both)
+        if meta.prompt_node.is_none()
+            && find_first_node(&workflow, "CLIPTextEncode").is_none()
+            && meta.input_image_node.is_none()
+        {
+            anyhow::bail!("no CLIPTextEncode or input_image_node in {:?}", path);
+        }
+
         let prompt_node = meta.prompt_node
-            .or_else(|| find_first_node(&workflow, "CLIPTextEncode"))
-            .ok_or_else(|| anyhow!("no CLIPTextEncode node in {:?}", path))?;
+            .or_else(|| find_first_node(&workflow, "CLIPTextEncode"));
 
         let extra_params_schema = build_extra_params_schema(&workflow, &meta.extra_params);
 
@@ -133,6 +143,7 @@ impl ComfyUiWorkflowGenerator {
             negative_prompt_field: meta.negative_prompt_field,
             negative_prompt_field_extra: meta.negative_prompt_field_extra,
             extra_param_nodes: meta.extra_params,
+            input_image_node:  meta.input_image_node,
             default_negative: config.default_negative.clone(),
             base_url: config.base_url.clone(),
             http,
@@ -159,12 +170,10 @@ impl ComfyUiWorkflowGenerator {
 
             let status = &entry["status"];
 
-            // Still running
-            if status["completed"].as_bool() == Some(false) {
-                continue;
-            }
-
-            // Execution error — extract the message from status.messages
+            // Execution error — extract the message from status.messages.
+            // Must be checked BEFORE the "still running" guard: a failed prompt
+            // reports `completed: false`, so checking completion first would
+            // mask the error and poll until the deadline.
             if status["status_str"].as_str() == Some("error") {
                 let error_msg = status["messages"].as_array()
                     .and_then(|msgs| {
@@ -178,6 +187,11 @@ impl ComfyUiWorkflowGenerator {
                     })
                     .unwrap_or_else(|| "unknown execution error".to_string());
                 anyhow::bail!("ComfyUI execution error: {error_msg}");
+            }
+
+            // Still running
+            if status["completed"].as_bool() == Some(false) {
+                continue;
             }
 
             if let Some(outputs) = entry["outputs"].as_object() {
@@ -220,12 +234,14 @@ impl ImageGenerate for ComfyUiWorkflowGenerator {
             obj.remove("_personal_agent");
         }
 
-        // Inject prompt — use custom field name, default to "text"
-        let prompt_field = self.prompt_field.as_deref().unwrap_or("text");
-        workflow[&self.prompt_node]["inputs"][prompt_field] = json!(prompt);
-        if let Some(ref extras) = self.prompt_field_extra {
-            for field in extras {
-                workflow[&self.prompt_node]["inputs"][field] = json!(prompt);
+        // Inject prompt — skip if the workflow has no prompt node (e.g. upscale-only)
+        if let Some(ref node) = self.prompt_node {
+            let prompt_field = self.prompt_field.as_deref().unwrap_or("text");
+            workflow[node]["inputs"][prompt_field] = json!(prompt);
+            if let Some(ref extras) = self.prompt_field_extra {
+                for field in extras {
+                    workflow[node]["inputs"][field] = json!(prompt);
+                }
             }
         }
 
@@ -248,6 +264,44 @@ impl ImageGenerate for ComfyUiWorkflowGenerator {
             if let (Some(node), Some(v)) = (&self.extra_param_nodes.height_node, params["height"].as_i64()) { workflow[node]["inputs"]["height"] = json!(v); }
             if let (Some(node), Some(v)) = (&self.extra_param_nodes.steps_node,  params["steps"].as_i64())  { workflow[node]["inputs"]["steps"]  = json!(v); }
         }
+
+        // ── Input image (img2img) ──────────────────────────────────────────────────
+        if let (Some(node), Some(image_path)) = (&self.input_image_node, extra_params.and_then(|p| p["input_image"].as_str())) {
+            // 1. Read the image file
+            let image_bytes = tokio::fs::read(image_path).await
+                .map_err(|e| anyhow!("failed to read input image '{image_path}': {e}"))?;
+
+            // 2. Get just the filename (strip path)
+            let filename = Path::new(image_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .ok_or_else(|| anyhow!("invalid image path: {image_path}"))?;
+
+            // 3. Upload to ComfyUI
+            let upload_url = format!("{}/upload/image", self.base_url.trim_end_matches('/'));
+            let form = reqwest::multipart::Form::new()
+                .part("image", reqwest::multipart::Part::bytes(image_bytes)
+                    .file_name(filename.to_string())
+                    .mime_str("image/png")
+                    .unwrap_or_else(|_| reqwest::multipart::Part::bytes(vec![])))
+                .text("overwrite", "true");
+
+            let upload_resp = self.http.post(&upload_url)
+                .multipart(form)
+                .send().await
+                .map_err(|e| anyhow!("ComfyUI /upload/image failed: {e}"))?;
+
+            if !upload_resp.status().is_success() {
+                let status = upload_resp.status();
+                let body   = upload_resp.text().await.unwrap_or_default();
+                anyhow::bail!("ComfyUI /upload/image error {status}: {body}");
+            }
+
+            // 4. Set the filename in the LoadImage node
+            // Use just the name (ComfyUI prepends its input/ directory)
+            workflow[node]["inputs"]["image"] = json!(filename);
+        }
+
 
         // POST /prompt
         let url = format!("{}/prompt", self.base_url.trim_end_matches('/'));

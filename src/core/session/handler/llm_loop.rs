@@ -141,7 +141,7 @@ impl ChatSessionHandler {
                     ).await?;
                     chat_history::set_model_db_id(pool, message_id, cur_llm.model_db_id).await?;
                     if let (Some(i), Some(o)) = (resp.input_tokens, resp.output_tokens) {
-                        chat_history::set_usage(pool, message_id, i, o, 0).await?;
+                        chat_history::set_usage(pool, message_id, i, o, 0, resp.cost).await?;
                     }
                     return Ok(TurnOutcome::Final {
                         content:       resp.content,
@@ -153,14 +153,14 @@ impl ChatSessionHandler {
                     });
                 }
 
-                LlmTurn::ToolCalls { content: assistant_text, calls, input_tokens, output_tokens, reasoning_content, .. } => {
+                LlmTurn::ToolCalls { content: assistant_text, calls, input_tokens, output_tokens, reasoning_content, cost, .. } => {
                     let message_id = chat_history::append(
                         pool, stack_id, &chat_history::Role::Assistant, &assistant_text, false,
                         reasoning_content.as_deref(),
                     ).await?;
                     chat_history::set_model_db_id(pool, message_id, cur_llm.model_db_id).await?;
                     if let (Some(i), Some(o)) = (input_tokens, output_tokens) {
-                        chat_history::set_usage(pool, message_id, i, o, 0).await?;
+                        chat_history::set_usage(pool, message_id, i, o, 0, cost).await?;
                     }
                     if !assistant_text.trim().is_empty() || input_tokens.is_some() {
                         tx.send(ServerEvent::Thinking {
@@ -301,7 +301,10 @@ impl ChatSessionHandler {
                             info!(session_id = self.session_id, tool_call_id, "restart approved — marking done then exiting");
                             chat_llm_tools::complete(pool, tool_call_id, "Riavvio avviato.").await?;
                             tx.send(ServerEvent::ToolDone { tool_call_id, result: "Riavvio avviato.".to_string() }).await.ok();
-                            std::process::exit(-1);
+                            // Use _exit() to skip C atexit handlers (e.g. Metal GPU cleanup in
+                            // whisper-rs/ggml, which aborts with SIGABRT and yields exit code 134
+                            // instead of 255 — breaking the run.sh restart supervisor).
+                            unsafe { libc::_exit(-1) }
                         }
 
                         let dispatch_result: anyhow::Result<String> = if

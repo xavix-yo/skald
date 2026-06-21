@@ -66,6 +66,7 @@ Consequences of the split:
 |---|---|
 | `payloads.rs` | E2E JSON payload schemas (`inbox_update`, `notification`, client responses incl. `inbox_request`). Zlib-compressible per v2 framing.md |
 | `app.rs` | `RelayApp`: Inbox dispatch (`broadcast_inbox`/`apply_client_payload`), authorization policy, the `events()` consumer loop |
+| `notifier.rs` | `DelayedNotifier`: debounces phone pushes (`notify_delay_secs`) so resolving on the computer suppresses the push. See [Delayed push](#delayed-push) |
 | `router.rs` | The QR-code HTTP endpoint (`/pairingqrcode`), resolves the current `RelayApp` → `client.lookup_pairing` |
 | `agent.rs` | `RelayAgent` control trait (pairing, list, authorize, revoke) |
 | `tools.rs` | The three LLM tools, registered in the main crate's `ToolRegistry` |
@@ -81,9 +82,15 @@ Stored in the `plugins` table (JSON, edited via the plugin UI / `configure_plugi
 relay_url: "wss://relay.skaldagent.net/v1/ws"  # empty ⇒ plugin idle (no WS)
 pairing_ttl: 300                                # seconds, max 600
 require_device_confirmation: true               # manual confirm new devices (recommended)
+notify_delay_secs: 20                           # debounce before pushing to the phone (0 = immediate)
 ```
 
 `enabled` (the standard plugin flag) starts/stops the runloop.
+
+`notify_delay_secs` debounces the **phone push** for a new approval/clarification
+(see [Delayed push](#delayed-push)). The mobile push is only useful when you're
+away from the computer; if you answer at the computer within the window, no phone
+notification is sent. Set `0` to push immediately.
 
 ---
 
@@ -145,8 +152,10 @@ device sends the complete list including it; revoking sends it without.
 
 - **Inbox → clients:** the bus subscriber reacts to the four Inbox events
   (`approval_requested`, `approval_resolved`, `clarification_requested`,
-  `clarification_resolved`), builds an `InboxSnapshot` via `inbox.list_pending()`,
-  and sends a sealed `inbox_update` to every Authorized client. Each approval
+  `clarification_resolved`) and routes them through the **debouncer** (see
+  [Delayed push](#delayed-push)) before building an `InboxSnapshot` via
+  `inbox.list_pending()` and sending a sealed `inbox_update` to every Authorized
+  client. Each approval
   carries a humanised `summary` (from `Tool::describe(Short)`, computed in
   `Inbox::list_pending`) for the card/notification plus the raw `arguments`
   (untruncated) for the detail dialog — so the user sees the full `execute_cmd`
@@ -169,6 +178,33 @@ device sends the complete list including it; revoking sends it without.
   if the agent is offline, the client gets `PeerOffline` immediately instead of
   waiting. Side-effect-free and idempotent (by `request_id`). See
   `data/ios-app/v2/relay-protocol.md` §3.1.
+
+---
+
+## Delayed push
+
+A phone push is only valuable when the user is *away* from the computer. When
+they're at the chat, every approval/clarification would otherwise fire an
+instant — and pointless — notification, since they answer on the computer within
+seconds. `DelayedNotifier` (`notifier.rs`) debounces this between the bus events
+and `broadcast_inbox()`:
+
+- **`*_requested`** arms a timer (`notify_delay_secs`, default 20s) keyed by
+  `(kind, request_id)` — approvals and clarifications use independent id
+  counters, so the kind is part of the key. If the timer elapses unresolved, the
+  key is marked *notified* and the Inbox is pushed (`broadcast_inbox`, `live=false`
+  → store-and-forward / offline push).
+- **`*_resolved`** before the timer fires ⇒ the timer is cancelled and **nothing
+  is sent**. If the push already went out, the resolution is broadcast so the
+  phone clears the item. (Untracked ids fall back to a broadcast for snapshot
+  freshness.)
+
+This only affects the **phone**: the desktop/web approval UI runs over the
+per-session WebSocket (`ApprovalRequired`/`AgentQuestion`) and is never delayed.
+Phone-driven responses (`apply_client_payload`) still `broadcast_inbox()`
+immediately; the subsequent `*_resolved` bus event is handled idempotently. Armed
+timers are cancelled on plugin stop (`cancel_all`). Set `notify_delay_secs: 0`
+for the previous instant-push behaviour.
 
 ---
 
