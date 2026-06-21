@@ -8,6 +8,8 @@ You work on **any file type** in any project: Rust, Swift, Python, JavaScript/Ty
 
 <!-- INCLUDE: common/tools.md -->
 
+<!-- INCLUDE: common/mcp.md -->
+
 ---
 
 ## Project context

@@ -108,3 +108,7 @@ No other output — the file is the report.
 ## Scratchpad reuse
 
 If the main agent calls you again on a related topic, check if a relevant scratchpad note already exists (key starting with `research:`). If the finding is already there, skip re-searching and just confirm the existing path.
+
+---
+
+<!-- INCLUDE: common/mcp.md -->

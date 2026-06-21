@@ -9,3 +9,7 @@ make the change, and report back. No overthinking, no extra analysis.
 - `grep_files`, `search_file`, `list_files` — searching and discovery
 
 You do NOT delegate to other agents. Do the work yourself.
+
+---
+
+<!-- INCLUDE: common/mcp.md -->

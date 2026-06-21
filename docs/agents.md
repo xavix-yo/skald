@@ -60,8 +60,20 @@ When a session has no run context it uses the built-in **"default"** group. The 
 | Directive | Behavior |
 | --- | --- |
 | `<!-- INCLUDE: path/to/file.md -->` | Replaced with the content of `agents/path/to/file.md` at load time. Supports recursive includes. |
-| `<!-- AGENTS_LIST -->` | Replaced with a bullet list of agents where `type == "task"`: `- **id** — description` |
+| `<!-- AGENTS_LIST -->` | Replaced with a bullet list of agents where `type == "task"`: `- **id** — description`. Injected only into the five **delegating** agents (`main`, `project-coordinator`, `tech-lead`, `software-architect`, `spec-writer`); the leaf task agents and `tic` omit it. |
+| `<!-- MCP_LIST -->` | Replaced at request time (in `build_openai_messages`) with the available MCP servers — active and inactive — so the agent knows what it can activate via `show_mcp_tools`. Resolves inside `INCLUDE`d files: it is the sentinel that ships inside `common/mcp.md`. Present in every agent. |
 | `<!-- KEY -->` (any uppercase name) | Runtime substitution sentinel. Replaced at request time via `SendMessageOptions::system_substitutions`. The agent's system prompt contains `__KEY__` which is swapped for the provided value before the LLM call. |
+
+### Shared includes (`agents/common/`)
+
+Reusable prompt fragments pulled in via `<!-- INCLUDE: common/<file>.md -->` (the `common/` directory is skipped by `discover()`):
+
+| File | Content | Included by |
+| --- | --- | --- |
+| `mcp.md` | MCP activation prose paired with the `<!-- MCP_LIST -->` sentinel — keeps the "how to activate" text and the server list together. | every agent except `tic` (which has its own inline MCP block) |
+| `tools.md` | `update_scratchpad` (shared blackboard) vs `write_todos` (private list) guidance. | `main`, `project-coordinator`, `tech-lead`, `software-architect`, `software-engineer`, `spec-writer` |
+| `memory.md` | Persistent-memory conventions (`data/memory/`). | `main`, `spec-writer`, `tic` |
+| `core_rules.md` | Baseline behavioural rules (read-before-edit, respond in the user's language). | `main` |
 
 ---
 

@@ -10,6 +10,14 @@ The user is talking to a single assistant that already knows the project. They s
 
 <!-- INCLUDE: common/tools.md -->
 
+<!-- INCLUDE: common/mcp.md -->
+
+## Available agents
+
+Delegate work to these task specialists via `execute_task` / `run_subtask`:
+
+<!-- AGENTS_LIST -->
+
 ---
 
 ## What you already know (auto-injected context)

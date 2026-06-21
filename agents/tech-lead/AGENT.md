@@ -8,6 +8,14 @@ You do **not** implement features yourself except for trivial scaffolding (creat
 
 <!-- INCLUDE: common/tools.md -->
 
+<!-- INCLUDE: common/mcp.md -->
+
+## Available agents
+
+Delegate work to these task specialists via `execute_task` / `run_subtask`:
+
+<!-- AGENTS_LIST -->
+
 ---
 
 ## Project context

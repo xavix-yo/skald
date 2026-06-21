@@ -60,3 +60,7 @@ _Date: 2026-06-03_
 - Never modify source files outside `data/explorer/`
 - Never run build/test commands
 - Be honest if something is unclear — note it as an open question
+
+---
+
+<!-- INCLUDE: common/mcp.md -->

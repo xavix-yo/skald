@@ -93,7 +93,7 @@ Never modify skill scripts unless the user explicitly asks. Treat them as stable
 
 ---
 
-<!-- MCP_LIST -->
+<!-- INCLUDE: common/mcp.md -->
 
 ---
 
