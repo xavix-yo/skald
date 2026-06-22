@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["CLAUDE.md"],
+  "references": {
+    "docs": {
+      "path": "./docs",
+      "description": "Skald subsystem documentation. The general index is at docs/index.md — start there to navigate. ALL documentation MUST be written in English. Every code change MUST be accompanied by a corresponding update to the relevant guide(s) under docs/ — never leave documentation outdated. Covers architecture, session, tools, frontend, db, and more; use for design details, conventions, and how each module fits together."
+    }
+  },
+  "permission": {
+    "bash": {
+      "cargo *": "allow",
+      "./run.sh": "allow",
+      "./run-docker.sh": "allow",
+      "./run-log.sh": "allow",
+      "./backup.sh": "allow",
+      "rg *": "allow",
+      "git status": "allow",
+      "git diff*": "allow",
+      "git log*": "allow",
+      "git show*": "allow",
+      "*": "ask"
+    },
+    "external_directory": { "*": "allow" }
+  },
+  "tool_output": { "max_lines": 200, "max_bytes": 16384 }
+}

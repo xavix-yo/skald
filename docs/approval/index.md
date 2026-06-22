@@ -176,7 +176,7 @@ The bypass is activated by the **human** (not the LLM) from any of these surface
 
 - **Agent Inbox** page (REST `/api/inbox/approvals/:id/resolve` with `bypass_secs`)
 - **Copilot chat** (WebSocket `approve_write`/`approve_tool` with `bypass_secs` field)
-- **Telegram bot** inline keyboard (⏱ 15 min / 🔄 Sessione buttons → `ApprovalApi::approve_with_bypass`)
+- **Telegram bot** inline keyboard (⏱ 15 min / 🔄 Session buttons → `ApprovalApi::approve_with_bypass`)
 
 The LLM has no tools to activate it — giving the LLM the ability to disable its own oversight would defeat the purpose of the gate.
 
@@ -336,11 +336,11 @@ The Telegram plugin uses `ApprovalApi::approve_with_bypass` (defined in `crates/
 
 ```text
 [✅ Approve]  [❌ Reject]
-[⏱ 15 min]   [🔄 Sessione]
+[⏱ 15 min]   [🔄 Session]
 ```
 
 Tapping **⏱ 15 min** → `approve_with_bypass(request_id, Some(900))`.
-Tapping **🔄 Sessione** → `approve_with_bypass(request_id, None)`.
+Tapping **🔄 Session** → `approve_with_bypass(request_id, None)`.
 
 `approve_with_bypass` calls `ApprovalManager::approve()` then registers the appropriate session bypass (auto-detected scope).
 

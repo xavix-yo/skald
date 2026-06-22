@@ -39,7 +39,7 @@ Access control is managed entirely through the file `secrets/telegram_whitelist.
 ```
 
 - `whitelist` — array of authorized `chat_id` values (integers). Users in this array can send messages to the agent.
-- `pending_pairings` — users who have contacted the bot but are not yet authorized. Each entry has a `code` shown to the user in Telegram chat, their `chat_id`, and the `issued_at` timestamp.
+- `pending_pairings` — users who have contacted the bot but are not yet authorized. Each entry has a `code` shown to the user in Telegram chat, their `chat_id`, and the `issued_at` timestamp. Entries older than **24 hours** are pruned automatically the next time an unauthorized user contacts the bot, so abandoned codes do not pile up.
 
 ### Pairing flow
 
@@ -100,7 +100,7 @@ When the LLM triggers a tool that requires user approval (`execute_cmd`, `restar
 
    ```text
    [✅ Approve]  [❌ Reject]
-   [⏱ 15 min]   [🔄 Sessione]
+   [⏱ 15 min]   [🔄 Session]
    ```
 
 3. Tapping a button resolves the pending approval and execution continues or is cancelled.

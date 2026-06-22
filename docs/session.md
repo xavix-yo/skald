@@ -345,6 +345,8 @@ This means kill works correctly even when the task is blocked on `ask_user_clari
 
 Only one `handle_message` / `resume_turn` call can run per `ChatSessionHandler` at a time. The `processing: Mutex<()>` is held for the entire duration. A second call blocks until the first completes or is cancelled.
 
+Note that callers don't reach `handle_message` directly: `ChatHub` serializes user messages **per source** through a single-consumer inbox *before* the `processing` lock, and **coalesces** messages that arrive during an in-flight turn into one follow-up turn. So in practice the `processing` lock is rarely contended for interactive sources — see [chat-hub.md](chat-hub.md).
+
 Synchronous sub-agents run **inline in the same task** as the parent (plain recursion in `dispatch_sub_agent`), so the single `processing` lock covers the whole parent+child tree — one user message is one logical critical section. (Asynchronous tasks — `execute_task` mode=async — are a separate mechanism: a new ephemeral session driven by the cron runner, whose result is later injected via `inject_async_result` → `resume_turn`.)
 
 ---

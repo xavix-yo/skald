@@ -63,20 +63,49 @@ fn md_headers_to_html(text: &str) -> String {
     re.replace_all(text, "<b>$1</b>").into_owned()
 }
 
+/// Safety-net: convert residual inline `` `code` `` to <code>code</code>,
+/// HTML-escaping the inner text so it renders verbatim.
+fn md_inline_code_to_html(text: &str) -> String {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"`([^`\n]+?)`").unwrap());
+    re.replace_all(text, |caps: &regex::Captures| {
+        format!("<code>{}</code>", escape_html(&caps[1]))
+    })
+    .into_owned()
+}
+
 /// Sanitize LLM output for Telegram HTML rendering:
-/// 1. Convert Markdown tables → bullet lists (Telegram has no `<table>` support).
-/// 2. Convert residual `**bold**` → `<b>bold</b>`.
-/// 3. Convert residual `## headers` → `<b>text</b>`.
+/// 1. Convert fenced code blocks (```) → `<pre>…</pre>` (inner text escaped).
+/// 2. Convert Markdown tables → bullet lists (Telegram has no `<table>` support).
+/// 3. Convert residual `**bold**` → `<b>bold</b>`.
+/// 4. Convert residual `## headers` → `<b>text</b>`.
+/// 5. Convert residual inline `` `code` `` → `<code>code</code>`.
 fn sanitize_for_telegram(text: &str) -> String {
-    // Pass 1: table conversion (line-by-line state machine)
+    // Pass 1: block conversion (line-by-line state machine for fences & tables)
     let lines: Vec<&str> = text.lines().collect();
     let mut out = String::with_capacity(text.len());
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim();
+
+        // Fenced code block: ``` … ``` → <pre>escaped</pre>
+        if trimmed.starts_with("```") {
+            i += 1; // skip the opening fence (and any language tag)
+            let start = i;
+            while i < lines.len() && !lines[i].trim().starts_with("```") {
+                i += 1;
+            }
+            let inner = lines[start..i].join("\n");
+            if i < lines.len() { i += 1; } // skip the closing fence
+            out.push_str("<pre>");
+            out.push_str(&escape_html(&inner));
+            out.push_str("</pre>\n");
+            continue;
+        }
+
+        // Markdown table block
         if trimmed.starts_with('|') && trimmed.ends_with('|') && trimmed.len() > 1 {
-            // Collect the whole table block
             let start = i;
             while i < lines.len() && {
                 let t = lines[i].trim();
@@ -94,9 +123,10 @@ fn sanitize_for_telegram(text: &str) -> String {
         }
     }
 
-    // Pass 2 & 3: residual Markdown
+    // Passes 2-4: residual Markdown
     let out = md_bold_to_html(&out);
-    md_headers_to_html(&out)
+    let out = md_headers_to_html(&out);
+    md_inline_code_to_html(&out)
 }
 
 /// Convert a tool label (our internal format with backtick-wrapped args) to

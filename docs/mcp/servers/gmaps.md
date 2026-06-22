@@ -12,13 +12,16 @@ A Python MCP server providing **public-transit & mapping** capabilities via the 
 
 ## Tools
 
+All tools are callable as `mcp__gmaps__<tool>`; the table lists the bare `<tool>` names.
+
 | Tool | Required params | Optional params | Description |
-|------|----------------|-----------------|-------------|
-| `maps_directions` | `origin`, `destination` | `mode`, `departure_time`, `transit_mode`, `transit_routing_preference`, `alternatives`, `language` | Step-by-step directions (transit, driving, walking, bicycling) |
-| `maps_geocode` | `address` | `language`, `region` | Address / place name → coordinates + place_id |
-| `maps_reverse_geocode` | `lat`, `lng` | `language` | Coordinates → formatted address |
-| `maps_search_places` | *(at least one of `query`/`location`)* | `radius`, `type`, `language` | Find nearby stations, stops, POIs |
-| `maps_distance_matrix` | `origins`, `destinations` | `mode`, `language` | Travel time & distance between multiple points |
+|------|-----------------|-----------------|-------------|
+| `status` | *(none)* | *(none)* | Self-check: verifies the API key is valid and the Geocoding API responds. Call first when another Maps tool fails. |
+| `directions` | `origin`, `destination` | `mode`, `departure_time`, `transit_mode`, `transit_routing_preference`, `alternatives`, `language` | Step-by-step directions (transit, driving, walking, bicycling) |
+| `geocode` | `address` | `language`, `region` | Address / place name → coordinates + place_id |
+| `reverse_geocode` | `lat`, `lng` | `language` | Coordinates → formatted address |
+| `search_places` | *(at least one of `query`/`location`)* | `radius`, `type`, `language` | Find nearby stations, stops, POIs |
+| `distance_matrix` | `origins`, `destinations` | `mode`, `language` | Travel time & distance between multiple points |
 
 ---
 
@@ -41,10 +44,10 @@ Enable all four in the [Google Cloud Console](https://console.cloud.google.com/a
 
 | API | Used by |
 |-----|---------|
-| **Directions API** | `maps_directions` |
-| **Geocoding API** | `maps_geocode`, `maps_reverse_geocode` |
-| **Places API** | `maps_search_places` |
-| **Distance Matrix API** | `maps_distance_matrix` |
+| **Directions API** | `directions` |
+| **Geocoding API** | `geocode`, `reverse_geocode` |
+| **Places API** | `search_places` |
+| **Distance Matrix API** | `distance_matrix` |
 
 ---
 
@@ -93,10 +96,17 @@ register_mcp(
 
 ## Usage Examples
 
+### Self-check: is Maps working?
+
+```
+mcp__gmaps__status()
+```
+Returns `OK: …` if the API key is present, valid, and the Geocoding API responds; otherwise an `Error:` string explaining what to fix. Call this first whenever another Maps tool fails.
+
 ### Transit directions home (now)
 
 ```
-mcp__gmaps__maps_directions(
+mcp__gmaps__directions(
   origin="Piazza del Duomo, Milano",
   destination="casa mia",   ← or the real address saved in agent memory
   mode="transit"
@@ -106,7 +116,7 @@ mcp__gmaps__maps_directions(
 ### Prefer train, fewer transfers
 
 ```
-mcp__gmaps__maps_directions(
+mcp__gmaps__directions(
   origin="current location",
   destination="Via Roma 1, Torino",
   mode="transit",
@@ -118,7 +128,7 @@ mcp__gmaps__maps_directions(
 ### Find the nearest metro station
 
 ```
-mcp__gmaps__maps_search_places(
+mcp__gmaps__search_places(
   query="metro",
   location="Piazza Garibaldi, Napoli",
   radius=500,
@@ -129,7 +139,7 @@ mcp__gmaps__maps_search_places(
 ### How long does it take from A to B?
 
 ```
-mcp__gmaps__maps_distance_matrix(
+mcp__gmaps__distance_matrix(
   origins="Stazione Centrale, Milano",
   destinations="Aeroporto Malpensa",
   mode="transit"
@@ -164,7 +174,7 @@ Whenever a parameter accepts coordinates, pass them as a **`"latitude,longitude"
 
 ### `departure_time`
 
-Must be the **literal string `"now"`** or an **ISO 8601 datetime string with timezone offset**, e.g. `"2025-06-15T08:30:00+02:00"`. Never pass a Unix timestamp integer.
+Must be the **literal string `"now"`** or an **ISO 8601 datetime string with timezone offset**, e.g. `"2025-06-15T08:30:00+02:00"`. Never pass a Unix timestamp integer — the tool now rejects non-string values with an explicit error.
 
 ### `transit_mode`
 
@@ -178,9 +188,17 @@ Restricts results to a specific vehicle: `"train"` = intercity/regional rail, `"
 |-------|----------|
 | API key not found | `"Error: Google Maps API key not found. Set GOOGLE_MAPS_API_KEY…"` |
 | `googlemaps` not installed | `"Error: Missing dependency: No module named 'googlemaps'. Run: pip install googlemaps"` |
+| `OVER_QUERY_LIMIT` | `"Error: <API> API quota exceeded (OVER_QUERY_LIMIT). Check usage and billing in the Google Cloud Console."` |
+| `REQUEST_DENIED` | `"Error: <API> API request denied (REQUEST_DENIED). Verify that the API key … is valid and that the <API> API is enabled …"` |
+| `INVALID_REQUEST` | `"Error: <API> API rejected the request as invalid (INVALID_REQUEST). Check that the addresses, coordinates, and parameters are well-formed."` |
+| `MAX_ELEMENTS_EXCEEDED` | `"Error: <API> API returned MAX_ELEMENTS_EXCEEDED — too many origins×destinations at once. …"` |
+| `NOT_FOUND` | `"Error: <API> API could not geocode one of the supplied places. …"` |
+| Timeout | `"Error: <API> API request timed out. Retry in a moment."` |
 | No route found | `"No routes found from '…' to '…'."` |
-| API call failure | `"Error: Directions API call failed: …"` |
 | Missing required param | `"Error: Missing required parameter '…'"` |
+| Invalid `departure_time` | `"Error: 'departure_time' must be 'now' or an ISO 8601 string …"` |
+
+All error responses are flagged with `isError: true`. The error label `<API>` reflects which Google Maps Platform API was being called (Directions, Geocoding, Places, Distance Matrix).
 
 All errors are logged to stderr with `[gmaps_mcp]` prefix.
 

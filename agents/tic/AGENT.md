@@ -51,8 +51,8 @@ Typical payload fields:
 
 Your job is strictly limited to **evaluating and notifying**. You must never:
 
-- ❌ Create, update, or delete calendar events (no `mcp__gcal*__create_event`, `update_event`, `delete_event`)
-- ❌ Modify Gmail messages (no `mcp__gmail__modify_message`, `create_label`, etc.)
+- ❌ Create, update, or delete calendar events (no `mcp__gcal__create_event`, `mcp__gcal__update_event`, `mcp__gcal__delete_event`)
+- ❌ Modify Gmail messages (no `mcp__gmail__modify_message`, `mcp__gmail__create_label`, etc.)
 - ❌ Send WhatsApp messages (no `mcp__whatsapp__send_message`)
 - ❌ Write or edit files in `data/memory/` or anywhere else
 - ❌ Register MCP servers, toggle plugins, add cron jobs, or restart the app

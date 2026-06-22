@@ -130,7 +130,7 @@ pub(crate) async fn message_handler(
                         .ok();
                 }
                 Err(e) => {
-                    bot.send_message(chat_id, format!("⚠️ Errore: {e}")).await.ok();
+                    bot.send_message(chat_id, format!("⚠️ Error: {e}")).await.ok();
                 }
             }
         }
@@ -309,8 +309,6 @@ async fn handle_llm_message(
     text:    String,
     shared:  Arc<TgShared>,
 ) {
-    let chat_hub = Arc::clone(&shared.chat_hub);
-
     bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
 
     // The persistent_forwarder (spawned once in start()) is always subscribed
@@ -323,11 +321,11 @@ async fn handle_llm_message(
         ..Default::default()
     };
 
-    tokio::spawn(async move {
-        if let Err(e) = chat_hub.send_message("telegram", &text, opts).await {
-            error!(error = %e, "telegram: LLM error");
-        }
-    });
+    // send_message only enqueues — the turn runs on ChatHub's per-source consumer —
+    // so awaiting inline keeps this message handler responsive.
+    if let Err(e) = shared.chat_hub.send_message("telegram", &text, opts).await {
+        error!(error = %e, "telegram: enqueue error");
+    }
 }
 
 // ── Voice message → transcribe → LLM ─────────────────────────────────────────

@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """Google Gmail MCP server (JSON-RPC 2.0 over stdio).
 
-Provides read and write access to Gmail via the Gmail API v1.
+Capabilities (callable as `mcp__gmail__<tool>`):
+  status             — self-check: credentials, token refresh, API reachability
+  list_messages      — list messages with optional query / label filter
+  get_message        — read a single message by ID (with optional body)
+  get_thread         — read all messages in a thread
+  list_labels        — list labels/folders with message counts
+  modify_message     — add/remove labels (mark read, archive, star)
+  send_message       — send an email (supports in-thread replies)
+  get_profile        — account info (email, totals)
+  create_label       — create a new label
+  download_attachments — save all attachments from a message to disk
+
+Provides read, modify, and send access to Gmail via the Gmail API v1.
 
 Credentials are read from ./secrets/gmail_creds.json by default.
 Override with GMAIL_CREDS_PATH env var.
@@ -17,7 +29,7 @@ import os
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
 # Log to stderr so stdout stays clean for JSON-RPC.
 def log(msg: str) -> None:
@@ -50,11 +62,11 @@ def _start_polling() -> None:
         log("Gmail push polling disabled: service not available.")
         return
     try:
-        profile = svc.users().getProfile(userId="me").execute()
+        profile = _call(lambda: svc.users().getProfile(userId="me").execute(), "Gmail")
         _last_history_id = str(profile.get("historyId", ""))
         log(f"Gmail polling started (historyId={_last_history_id}, interval={_POLL_INTERVAL_SECS}s).")
     except Exception as e:
-        log(f"Failed to get initial historyId, polling disabled: {e}")
+        log(f"Failed to get initial historyId, polling disabled: {_format_google_error(e, 'Gmail')}")
         return
     _poll_thread = threading.Thread(target=_poll_loop, daemon=True, name="gmail-poll")
     _poll_thread.start()
@@ -72,12 +84,12 @@ def _poll_once() -> None:
     if svc is None or not _last_history_id:
         return
     try:
-        result = svc.users().history().list(
+        result = _call(lambda: svc.users().history().list(
             userId="me",
             startHistoryId=_last_history_id,
             labelId="INBOX",
             historyTypes=["messageAdded"],
-        ).execute()
+        ).execute(), "Gmail")
 
         # Always advance the cursor, even if no new messages.
         new_history_id = result.get("historyId")
@@ -95,18 +107,18 @@ def _poll_once() -> None:
                 _fetch_and_emit_email(svc, msg_id)
 
     except Exception as e:
-        log(f"Gmail history poll error: {e}")
+        log(f"Gmail history poll error: {_format_google_error(e, 'Gmail')}")
 
 
 def _fetch_and_emit_email(svc: Any, msg_id: str) -> None:
     """Fetch metadata for a message and emit an event/new_email notification."""
     try:
-        msg = svc.users().messages().get(
+        msg = _call(lambda: svc.users().messages().get(
             userId="me",
             id=msg_id,
             format="metadata",
             metadataHeaders=["Subject", "From", "Date"],
-        ).execute()
+        ).execute(), "Gmail")
         headers = {h["name"]: h["value"] for h in msg.get("payload", {}).get("headers", [])}
         _emit_notification("event/new_email", {
             "message_id": msg_id,
@@ -118,18 +130,30 @@ def _fetch_and_emit_email(svc: Any, msg_id: str) -> None:
         })
         log(f"Notification emitted: new email {msg_id} from {headers.get('From', '?')!r}")
     except Exception as e:
-        log(f"Failed to fetch metadata for message {msg_id}: {e}")
+        log(f"Failed to fetch metadata for message {msg_id}: {_format_google_error(e, 'Gmail')}")
 
 
 # ── Credentials / service ──────────────────────────────────────────────────────
 
 _service = None
+_creds = None
+_creds_path: str | None = None
 _init_error: str | None = None
+
+
+def _persist_creds() -> None:
+    """Write the current credentials back to disk (used after a token refresh)."""
+    if _creds is not None and _creds_path:
+        try:
+            with open(_creds_path, "w") as f:
+                f.write(_creds.to_json())
+        except Exception as e:
+            log(f"Could not persist refreshed credentials: {e}")
 
 
 def _build_service() -> Any:
     """Build and return a Gmail service object, or None on failure."""
-    global _init_error
+    global _init_error, _creds, _creds_path
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
@@ -139,34 +163,35 @@ def _build_service() -> Any:
         log(_init_error)
         return None
 
-    creds_path = os.environ.get(
+    _creds_path = os.environ.get(
         "GMAIL_CREDS_PATH",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "secrets", "gmail_creds.json"),
     )
 
-    if not os.path.exists(creds_path):
+    if not os.path.exists(_creds_path):
         _init_error = (
-            f"Credentials file not found at {creds_path}. "
+            f"Credentials file not found at {_creds_path}. "
             "Run scripts/gmail_oauth_setup.py first, or set GMAIL_CREDS_PATH."
         )
         log(_init_error)
         return None
 
     try:
-        creds = Credentials.from_authorized_user_file(creds_path)
+        creds = Credentials.from_authorized_user_file(_creds_path)
     except Exception as e:
-        _init_error = f"Failed to load credentials from {creds_path}: {e}"
+        _init_error = f"Failed to load credentials from {_creds_path}: {e}"
         log(_init_error)
         return None
 
-    # Auto-refresh if expired.
+    # Publish creds globally so _persist_creds / _call can see them.
+    _creds = creds
+
+    # Auto-refresh if expired; fail hard if we cannot refresh (need re-auth).
     try:
         if not creds.valid:
             if creds.expired and creds.refresh_token:
                 creds.refresh(Request())
-                # Save updated token.
-                with open(creds_path, "w") as f:
-                    f.write(creds.to_json())
+                _persist_creds()
                 log("Token refreshed and saved.")
             else:
                 _init_error = "Credentials invalid and cannot be refreshed. Re-run scripts/gmail_oauth_setup.py."
@@ -184,7 +209,7 @@ def _build_service() -> Any:
         log(_init_error)
         return None
 
-    log(f"Gmail service built successfully (creds: {creds_path})")
+    log(f"Gmail service built successfully (creds: {_creds_path})")
     return service
 
 
@@ -193,6 +218,111 @@ def _get_service() -> Any:
     if _service is None:
         _service = _build_service()
     return _service
+
+
+# ── Error mapping & refresh-on-auth-error ──────────────────────────────────────
+
+
+def _is_auth_error(e: Exception) -> bool:
+    """True for 401 HttpError / RefreshError — candidates for a refresh+retry."""
+    try:
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        return False
+    if isinstance(e, HttpError):
+        return getattr(e, "status_code", None) == 401
+    try:
+        from google.auth.exceptions import RefreshError
+    except ImportError:
+        return False
+    return isinstance(e, RefreshError)
+
+
+def _call(fn: Callable[[], Any], api_label: str) -> Any:
+    """Run a googleapiclient call with one refresh-on-auth-error retry.
+
+    If the access token expired mid-session the first call raises a 401 HttpError
+    or a RefreshError. We refresh once, persist the new token, and retry the call.
+    Anything else (or a second failure) is re-raised so the caller can format it
+    via _format_google_error.
+    """
+    try:
+        return fn()
+    except Exception as e:
+        if not _is_auth_error(e) or _creds is None or not getattr(_creds, "refresh_token", None):
+            raise
+        try:
+            from google.auth.transport.requests import Request
+            _creds.refresh(Request())
+            _persist_creds()
+            log("Access token refreshed mid-session after auth error; retrying the call.")
+        except Exception as refresh_err:
+            log(f"Mid-session token refresh failed: {refresh_err}")
+            raise
+        return fn()
+
+
+def _http_error_reason(e: Exception) -> str:
+    """Best-effort short reason string from an HttpError (for 400/4xx detail)."""
+    return str(e).strip().replace("\n", " ")[:200]
+
+
+def _format_google_error(e: Exception, api_label: str) -> str:
+    """Map a googleapiclient / google-auth exception into an actionable Error: string."""
+    try:
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        HttpError = None  # type: ignore
+    try:
+        from google.auth.exceptions import RefreshError
+    except ImportError:
+        RefreshError = None  # type: ignore
+
+    if RefreshError is not None and isinstance(e, RefreshError):
+        return (
+            f"Error: {api_label} API token refresh failed (the refresh token may have been revoked "
+            "or expired). Re-run scripts/gmail_oauth_setup.py to re-authenticate."
+        )
+
+    if HttpError is not None and isinstance(e, HttpError):
+        status = getattr(e, "status_code", None)
+        if status == 401:
+            return (
+                f"Error: {api_label} API rejected the access token (401). The OAuth token is invalid "
+                "or revoked. Re-run scripts/gmail_oauth_setup.py to re-authenticate."
+            )
+        if status == 403:
+            return (
+                f"Error: {api_label} API returned 403 Forbidden. The OAuth scopes granted are "
+                "insufficient for this operation, or the Gmail API is disabled in the Google Cloud "
+                "Console. Verify the scopes in scripts/gmail_oauth_setup.py and the API enablement."
+            )
+        if status == 404:
+            return (
+                f"Error: {api_label} API returned 404 Not Found. Check the message/thread/attachment ID."
+            )
+        if status == 429:
+            return f"Error: {api_label} API rate limit exceeded (429). Wait a moment and retry."
+        if status == 400:
+            return (
+                f"Error: {api_label} API rejected the request as invalid (400). Check the parameters. "
+                f"Detail: {_http_error_reason(e)}"
+            )
+        if status is not None and 500 <= status < 600:
+            return f"Error: {api_label} API returned a server error (HTTP {status}). Retry in a moment."
+        return f"Error: {api_label} API call failed (HTTP {status}). Detail: {_http_error_reason(e)}"
+
+    return f"Error: {api_label} API call failed: {e}"
+
+
+def _status_report(icon: str, label: str, kind: str, description: str, steps: list[str] | None = None) -> str:
+    lines = [f"Status: {label} {icon} ({kind})", description]
+    if steps:
+        lines.append("")
+        lines.append("What to do:")
+        for i, s in enumerate(steps, 1):
+            lines.append(f"{i}. {s}")
+    return "\n".join(lines)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -248,10 +378,54 @@ def _format_message_summary(msg: dict) -> str:
     return f"- {subject}\n  From: {sender} | Date: {date} | ID: {mid} | Thread: {thread_id}\n  {snippet}"
 
 
+def _collect_attachments(parts: Any, results: list) -> None:
+    """Recursively collect attachment filenames and IDs from MIME parts."""
+    if not parts:
+        return
+    for part in parts:
+        filename = part.get("filename", "")
+        attachment_id = part.get("body", {}).get("attachmentId", "")
+        if filename and attachment_id:
+            results.append({"filename": filename, "attachmentId": attachment_id})
+        if "parts" in part:
+            _collect_attachments(part["parts"], results)
+
+
 # ── Tool implementations ───────────────────────────────────────────────────────
 
 
-def _list_messages(args: dict) -> str:
+def _gmail_status(args: dict | None = None) -> str:
+    """Self-check: credentials load, the token refreshes when needed, and the API answers.
+
+    Performs one cheap users().getProfile(userId='me') probe so we exercise the
+    OAuth token, the network, and the Gmail API in a single call.
+    """
+    # Step 1: deps + creds file + service build.
+    svc = _get_service()
+    if svc is None:
+        return _status_report("❌", "NOT_CONFIGURED", "action needed",
+            f"The Gmail service could not be built: {_init_error or 'unknown error'}.",
+            ["Run scripts/gmail_oauth_setup.py to authenticate and create secrets/gmail_creds.json.",
+             "Or set the GMAIL_CREDS_PATH env var to point at an existing credentials file."])
+
+    # Step 2: live probe — refresh-on-auth-error is handled inside _call.
+    try:
+        profile = _call(lambda: svc.users().getProfile(userId="me").execute(), "Gmail")
+    except Exception as e:
+        return _status_report("❌", "AUTH_OR_API_ERROR", "action needed",
+            f"The Gmail API did not respond to the probe call: {_format_google_error(e, 'Gmail')}",
+            ["Run scripts/gmail_oauth_setup.py to refresh / re-issue credentials.",
+             "If credentials are valid, verify the Gmail API is enabled in the Google Cloud Console."])
+
+    email = profile.get("emailAddress", "?")
+    return _status_report("✅", "READY", "ok",
+        "Google Gmail integration is operational: credentials load, the access token refreshes "
+        "automatically, and the Gmail API responds. All tools (list/get/thread/labels/modify/send/"
+        "download) are usable.\n"
+        f"Account: {email}")
+
+
+def _gmail_list_messages(args: dict) -> str:
     """List messages with optional filters."""
     svc = _get_service()
     if svc is None:
@@ -273,9 +447,9 @@ def _list_messages(args: dict) -> str:
         params["labelIds"] = label_ids
 
     try:
-        result = svc.users().messages().list(**params).execute()
+        result = _call(lambda: svc.users().messages().list(**params).execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to list messages: {e}"
+        return _format_google_error(e, "Gmail")
 
     items = result.get("messages", [])
     if not items:
@@ -285,10 +459,13 @@ def _list_messages(args: dict) -> str:
     lines = [f"Messages ({len(items)} total):"]
     for entry in items:
         try:
-            msg = svc.users().messages().get(userId="me", id=entry["id"], format="metadata", metadataHeaders=["Subject", "From", "Date"]).execute()
+            msg = _call(lambda e=entry: svc.users().messages().get(
+                userId="me", id=e["id"], format="metadata",
+                metadataHeaders=["Subject", "From", "Date"],
+            ).execute(), "Gmail")
             lines.append(_format_message_summary(msg))
         except Exception as e:
-            lines.append(f"- {entry['id']} (error fetching: {e})")
+            lines.append(f"- {entry['id']} (error fetching: {_http_error_reason(e)})")
 
     # Add paging info.
     next_token = result.get("nextPageToken")
@@ -298,7 +475,7 @@ def _list_messages(args: dict) -> str:
     return "\n".join(lines)
 
 
-def _get_message(args: dict) -> str:
+def _gmail_get_message(args: dict) -> str:
     """Get full content of a single message by ID."""
     svc = _get_service()
     if svc is None:
@@ -310,11 +487,15 @@ def _get_message(args: dict) -> str:
     include_body = args.get("include_body", True)
 
     fmt = "full" if include_body else "metadata"
+    meta_headers = [] if include_body else ["Subject", "From", "To", "Date"]
 
     try:
-        msg = svc.users().messages().get(userId="me", id=msg_id, format=fmt).execute()
+        msg = _call(lambda: svc.users().messages().get(
+            userId="me", id=msg_id, format=fmt,
+            **({"metadataHeaders": meta_headers} if meta_headers else {}),
+        ).execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to get message {msg_id}: {e}"
+        return _format_google_error(e, "Gmail")
 
     payload = msg.get("payload", {})
     headers = {h["name"]: h["value"] for h in payload.get("headers", [])}
@@ -349,7 +530,7 @@ def _get_message(args: dict) -> str:
     return "\n".join(lines)
 
 
-def _get_thread(args: dict) -> str:
+def _gmail_get_thread(args: dict) -> str:
     """Get an entire thread (all messages in it)."""
     svc = _get_service()
     if svc is None:
@@ -360,9 +541,12 @@ def _get_thread(args: dict) -> str:
         return "Error: Missing required parameter 'thread_id'."
 
     try:
-        thread = svc.users().threads().get(userId="me", id=thread_id, format="metadata", metadataHeaders=["Subject", "From", "Date"]).execute()
+        thread = _call(lambda: svc.users().threads().get(
+            userId="me", id=thread_id, format="metadata",
+            metadataHeaders=["Subject", "From", "Date"],
+        ).execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to get thread {thread_id}: {e}"
+        return _format_google_error(e, "Gmail")
 
     messages = thread.get("messages", [])
     subject = ""
@@ -383,16 +567,16 @@ def _get_thread(args: dict) -> str:
     return "\n".join(lines)
 
 
-def _list_labels(args: dict) -> str:
+def _gmail_list_labels(args: dict) -> str:
     """List all labels/categories in the Gmail account."""
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
 
     try:
-        result = svc.users().labels().list(userId="me").execute()
+        result = _call(lambda: svc.users().labels().list(userId="me").execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to list labels: {e}"
+        return _format_google_error(e, "Gmail")
 
     items = result.get("labels", [])
     if not items:
@@ -410,15 +594,8 @@ def _list_labels(args: dict) -> str:
     return "\n".join(lines)
 
 
-def _search_messages(args: dict) -> str:
-    """Search messages with Gmail query syntax (alias for list)."""
-    # This is the same as list_messages but defaults to more results.
-    args.setdefault("max_results", 20)
-    return _list_messages(args)
-
-
-def _modify_message(args: dict) -> str:
-    """Modify message labels (add/remove labels, mark read/archive/trash)."""
+def _gmail_modify_message(args: dict) -> str:
+    """Modify message labels (add/remove labels, mark read/archive/star)."""
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
@@ -442,19 +619,19 @@ def _modify_message(args: dict) -> str:
         body["removeLabelIds"] = remove_labels
 
     try:
-        svc.users().messages().modify(userId="me", id=msg_id, body=body).execute()
+        _call(lambda: svc.users().messages().modify(userId="me", id=msg_id, body=body).execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to modify message: {e}"
+        return _format_google_error(e, "Gmail")
 
     changes = []
     if add_labels:
         changes.append(f"added labels: {add_labels}")
     if remove_labels:
         changes.append(f"removed labels: {remove_labels}")
-    return f"Message {msg_id} modified: {'; '.join(changes)}"
+    return f"✅ Message {msg_id} modified: {'; '.join(changes)}"
 
 
-def _send_message(args: dict) -> str:
+def _gmail_send_message(args: dict) -> str:
     """Send an email message."""
     svc = _get_service()
     if svc is None:
@@ -498,23 +675,23 @@ def _send_message(args: dict) -> str:
         api_body["threadId"] = thread_id
 
     try:
-        sent = svc.users().messages().send(userId="me", body=api_body).execute()
+        sent = _call(lambda: svc.users().messages().send(userId="me", body=api_body).execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to send message: {e}"
+        return _format_google_error(e, "Gmail")
 
     return f"✅ Message sent! ID: {sent.get('id', '?')}"
 
 
-def _get_profile(args: dict) -> str:
+def _gmail_get_profile(args: dict) -> str:
     """Get Gmail profile info (email address, total/thread count)."""
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
 
     try:
-        profile = svc.users().getProfile(userId="me").execute()
+        profile = _call(lambda: svc.users().getProfile(userId="me").execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to get profile: {e}"
+        return _format_google_error(e, "Gmail")
 
     return (
         f"Email: {profile.get('emailAddress', '?')}\n"
@@ -524,7 +701,7 @@ def _get_profile(args: dict) -> str:
     )
 
 
-def _create_label(args: dict) -> str:
+def _gmail_create_label(args: dict) -> str:
     """Create a new Gmail label."""
     svc = _get_service()
     if svc is None:
@@ -544,27 +721,14 @@ def _create_label(args: dict) -> str:
     }
 
     try:
-        result = svc.users().labels().create(userId="me", body=body).execute()
+        result = _call(lambda: svc.users().labels().create(userId="me", body=body).execute(), "Gmail")
     except Exception as e:
-        return f"Error: {e}"
+        return _format_google_error(e, "Gmail")
 
-    return f"Label '{result.get('name', name)}' created (ID: {result.get('id', '?')})"
-
-
-def _collect_attachments(parts: Any, results: list) -> None:
-    """Recursively collect attachment filenames and IDs from MIME parts."""
-    if not parts:
-        return
-    for part in parts:
-        filename = part.get("filename", "")
-        attachment_id = part.get("body", {}).get("attachmentId", "")
-        if filename and attachment_id:
-            results.append({"filename": filename, "attachmentId": attachment_id})
-        if "parts" in part:
-            _collect_attachments(part["parts"], results)
+    return f"✅ Label '{result.get('name', name)}' created (ID: {result.get('id', '?')})"
 
 
-def _download_attachments(args: dict) -> str:
+def _gmail_download_attachments(args: dict) -> str:
     """Download all attachments from a Gmail message to a local folder."""
     svc = _get_service()
     if svc is None:
@@ -574,12 +738,18 @@ def _download_attachments(args: dict) -> str:
     if not msg_id:
         return "Error: Missing required parameter 'message_id'."
 
-    folder = args.get("folder", "uploads/gmail_attachments/")
+    # Default to data/gmail_attachments/ (served via /data/... in the frontend,
+    # consistent with whatsapp_media). Allow override.
+    default_folder = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "data", "gmail_attachments",
+    )
+    folder = args.get("folder") or default_folder
 
     try:
-        msg = svc.users().messages().get(userId="me", id=msg_id, format="full").execute()
+        msg = _call(lambda: svc.users().messages().get(userId="me", id=msg_id, format="full").execute(), "Gmail")
     except Exception as e:
-        return f"Error: Failed to get message {msg_id}: {e}"
+        return _format_google_error(e, "Gmail")
 
     payload = msg.get("payload", {})
 
@@ -597,11 +767,11 @@ def _download_attachments(args: dict) -> str:
         attachment_id = att["attachmentId"]
 
         try:
-            result = svc.users().messages().attachments().get(
-                userId="me", messageId=msg_id, id=attachment_id
-            ).execute()
+            result = _call(lambda a=att: svc.users().messages().attachments().get(
+                userId="me", messageId=msg_id, id=a["attachmentId"],
+            ).execute(), "Gmail")
         except Exception as e:
-            saved.append(f"- {filename}: ERROR fetching attachment: {e}")
+            saved.append(f"- {filename}: ERROR fetching attachment: {_http_error_reason(e)}")
             continue
 
         data = result.get("data", "")
@@ -629,14 +799,30 @@ def _download_attachments(args: dict) -> str:
         size = len(file_data)
         saved.append(f"- {abs_path} ({size} bytes)")
 
-    return "\n".join(["Attachments downloaded:"] + saved)
+    return "\n".join(["✅ Attachments downloaded:"] + saved)
 
-# ── JSON-RPC dispatch ──────────────────────────────────────────────────────────
+
+# ── Tool manifest ──────────────────────────────────────────────────────────────
 
 TOOLS = [
     {
+        "name": "status",
+        "description": (
+            "Self-check that the Google Gmail integration is operational: verifies the OAuth "
+            "credentials load, the access token refreshes when needed, and the Gmail API responds, "
+            "by performing one cheap getProfile probe. Call this first whenever another gmail tool "
+            "fails, or to give the user a quick yes/no on whether Gmail is usable right now."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "list_messages",
-        "description": "List Gmail messages with optional query filter and label filter. Uses Gmail search syntax (e.g. 'from:xxx', 'after:2024/1/1', 'is:unread'). Returns message summaries with subject, sender, date.",
+        "description": (
+            "List Gmail messages with optional query and label filter. Returns summaries with "
+            "subject, sender, date, message ID and thread ID. Use Gmail search syntax in 'query' "
+            "(e.g. 'from:john', 'is:unread', 'after:2024/01/01', 'has:attachment'). Pass the "
+            "returned IDs to get_message / modify_message."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -649,16 +835,16 @@ TOOLS = [
                     "description": "Max messages to return (default 20, max 50).",
                 },
                 "label_ids": {
-                    "type": "array",
+                    "type": ["string", "array"],
                     "items": {"type": "string"},
-                    "description": "Filter by label IDs (e.g. ['INBOX'], ['SENT'], ['STARRED']).",
+                    "description": "Filter by label IDs (e.g. 'INBOX', or ['INBOX','STARRED']). Pass a single string or an array.",
                 },
             },
         },
     },
     {
         "name": "get_message",
-        "description": "Get full content of a Gmail message by ID, including body text.",
+        "description": "Get full content of a Gmail message by ID, including body text (truncated at 10000 chars).",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -676,7 +862,7 @@ TOOLS = [
     },
     {
         "name": "get_thread",
-        "description": "Get all messages in a thread by thread ID.",
+        "description": "Get all messages in a thread by thread ID, newest last.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -690,37 +876,19 @@ TOOLS = [
     },
     {
         "name": "list_labels",
-        "description": "List all Gmail labels/folders/categories with message counts.",
+        "description": "List all Gmail labels/folders/categories with total and unread message counts. Use to resolve label IDs for modify_message.",
         "inputSchema": {
             "type": "object",
             "properties": {},
         },
     },
     {
-        "name": "search_messages",
-        "description": "Search Gmail messages using Gmail search syntax. Alias for list_messages with default query support.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Gmail search query (e.g. 'from:john', 'is:unread', 'has:attachment').",
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Max messages to return (default 20, max 50).",
-                },
-                "label_ids": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Filter by label IDs (e.g. ['INBOX']).",
-                },
-            },
-        },
-    },
-    {
         "name": "modify_message",
-        "description": "Modify message labels (mark as read, archive, star, etc.). Use label IDs like 'UNREAD', 'STARRED', 'INBOX'.",
+        "description": (
+            "Modify message labels: mark read, archive, star, etc. Use label IDs like 'UNREAD', "
+            "'STARRED', 'INBOX'. remove_labels=['UNREAD'] marks as read; remove_labels=['INBOX'] "
+            "archives. add_labels/remove_labels each accept a single string or an array."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -729,14 +897,14 @@ TOOLS = [
                     "description": "The Gmail message ID to modify.",
                 },
                 "add_labels": {
-                    "type": "array",
+                    "type": ["string", "array"],
                     "items": {"type": "string"},
-                    "description": "Labels to add (e.g. ['STARRED'], ['LABEL_1']).",
+                    "description": "Label ID(s) to add (e.g. 'STARRED', or ['STARRED','IMPORTANT']).",
                 },
                 "remove_labels": {
-                    "type": "array",
+                    "type": ["string", "array"],
                     "items": {"type": "string"},
-                    "description": "Labels to remove (e.g. ['UNREAD'] to mark as read, ['INBOX'] to archive).",
+                    "description": "Label ID(s) to remove (e.g. 'UNREAD' to mark as read, 'INBOX' to archive).",
                 },
             },
             "required": ["message_id"],
@@ -744,7 +912,11 @@ TOOLS = [
     },
     {
         "name": "send_message",
-        "description": "Send an email via Gmail. Supports in-thread replies via optional in_reply_to and thread_id parameters.",
+        "description": (
+            "Send an email via Gmail. Supports in-thread replies via the optional in_reply_to "
+            "(message ID) and thread_id parameters. For a reply, pass both for correct threading "
+            "across email clients."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -782,7 +954,7 @@ TOOLS = [
     },
     {
         "name": "get_profile",
-        "description": "Get Gmail profile info: email address, total message/thread count.",
+        "description": "Get Gmail profile info: email address, total message/thread count, current history ID.",
         "inputSchema": {
             "type": "object",
             "properties": {},
@@ -790,7 +962,7 @@ TOOLS = [
     },
     {
         "name": "create_label",
-        "description": "Create a new Gmail label/folder. Returns the label ID. Raises error if a label with the same name already exists.",
+        "description": "Create a new Gmail label/folder. Returns the new label ID. Fails if a label with the same name already exists.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -814,7 +986,11 @@ TOOLS = [
     },
     {
         "name": "download_attachments",
-        "description": "Download all attachments from a Gmail message to a local folder.",
+        "description": (
+            "Download all attachments from a Gmail message to a local folder. "
+            "Defaults to data/gmail_attachments/ (served via /data/... in the frontend). "
+            "Returns the absolute path and size of each saved file."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -824,13 +1000,29 @@ TOOLS = [
                 },
                 "folder": {
                     "type": "string",
-                    "description": "Local folder to save attachments into (default: uploads/gmail_attachments/).",
+                    "description": "Local folder to save attachments into (default: data/gmail_attachments/).",
                 },
             },
             "required": ["message_id"],
         },
     },
 ]
+
+
+# ── JSON-RPC dispatch ──────────────────────────────────────────────────────────
+
+TOOL_DISPATCH = {
+    "status":              _gmail_status,
+    "list_messages":       _gmail_list_messages,
+    "get_message":         _gmail_get_message,
+    "get_thread":          _gmail_get_thread,
+    "list_labels":         _gmail_list_labels,
+    "modify_message":      _gmail_modify_message,
+    "send_message":        _gmail_send_message,
+    "get_profile":         _gmail_get_profile,
+    "create_label":        _gmail_create_label,
+    "download_attachments": _gmail_download_attachments,
+}
 
 
 def _ok(req_id: Any, result: Any) -> str:
@@ -858,7 +1050,7 @@ def handle_request(msg: dict) -> str | None:
             "capabilities": {"tools": {}},
             "serverInfo": {
                 "name": "gmail",
-                "version": "0.1.0",
+                "version": "0.2.0",
             },
         })
 
@@ -873,37 +1065,18 @@ def handle_request(msg: dict) -> str | None:
         tool_name = params.get("name", "")
         tool_args = params.get("arguments", {})
 
-        try:
-            if tool_name == "list_messages":
-                text = _list_messages(tool_args)
-            elif tool_name == "get_message":
-                text = _get_message(tool_args)
-            elif tool_name == "get_thread":
-                text = _get_thread(tool_args)
-            elif tool_name == "list_labels":
-                text = _list_labels(tool_args)
-            elif tool_name == "search_messages":
-                text = _search_messages(tool_args)
-            elif tool_name == "modify_message":
-                text = _modify_message(tool_args)
-            elif tool_name == "send_message":
-                text = _send_message(tool_args)
-            elif tool_name == "get_profile":
-                text = _get_profile(tool_args)
-            elif tool_name == "create_label":
-                text = _create_label(tool_args)
-            elif tool_name == "download_attachments":
-                text = _download_attachments(tool_args)
-            else:
-                return _text_result(req_id, f"Unknown tool: {tool_name}", is_error=True)
+        handler = TOOL_DISPATCH.get(tool_name)
+        if handler is None:
+            return _text_result(req_id, f"Error: Unknown tool: {tool_name}", is_error=True)
 
+        try:
+            text = handler(tool_args)
             is_err = text.startswith("Error:")
             return _text_result(req_id, text, is_error=is_err)
         except Exception as e:
             log(f"Unhandled exception in tool '{tool_name}': {e}")
             return _text_result(req_id, f"Error: Internal error in tool '{tool_name}': {e}", is_error=True)
 
-    # Unknown method.
     return json.dumps({
         "jsonrpc": "2.0",
         "id": req_id,

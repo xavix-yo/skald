@@ -10,7 +10,7 @@
 /// # Human-in-the-loop approvals
 /// Tool calls requiring approval emit a `PendingWrite` event; the plugin
 /// forwards it to Telegram as an inline-keyboard message with
-/// [✅ Approva] [❌ Rifiuta] buttons.
+/// [✅ Approve] [❌ Reject] / [⏱ 15 min] [🔄 Session] buttons.
 ///
 /// # Adding new message types
 /// 1. Add a variant to `IncomingEvent` in `handlers.rs`.

@@ -26,8 +26,8 @@ async fn send_approval_keyboard(
             InlineKeyboardButton::callback("❌ Reject",   format!("reject:{request_id}")),
         ],
         vec![
-            InlineKeyboardButton::callback("⏱ 15 min",   format!("bypass_time:900:{request_id}")),
-            InlineKeyboardButton::callback("🔄 Sessione", format!("bypass_session:{request_id}")),
+            InlineKeyboardButton::callback("⏱ 15 min",  format!("bypass_time:900:{request_id}")),
+            InlineKeyboardButton::callback("🔄 Session", format!("bypass_session:{request_id}")),
         ],
     ]);
 
@@ -214,6 +214,18 @@ pub(crate) async fn persistent_forwarder(
 
             ServerEvent::AgentQuestion { request_id, tool_call_id, title, question, suggested_answers, .. } => {
                 info!(request_id, tool_call_id, %question, "telegram: persistent_forwarder received AgentQuestion");
+
+                // If a previous question is still pending, disable its (now-dead)
+                // buttons so tapping them doesn't silently no-op.
+                if let Some(prev) = shared.pending_question.lock().await.take() {
+                    bot.edit_message_reply_markup(chat_id, prev.message_id)
+                        .reply_markup(InlineKeyboardMarkup::new(vec![vec![
+                            InlineKeyboardButton::callback("⏭ Superseded by a newer question", "noop"),
+                        ]]))
+                        .await
+                        .ok();
+                }
+
                 let header = format!("❓ <b>{}</b>\n{}", escape_html(&title), escape_html(&question));
                 let keyboard = if suggested_answers.is_empty() {
                     None
@@ -361,7 +373,7 @@ pub(crate) async fn callback_handler(
             let id   = parts.next().and_then(|s| s.parse::<i64>().ok());
             secs.zip(id).map(|(s, id)| (id, ApprovalAction::BypassTime(s), "⏱ Bypass (timed)"))
         } else if let Some(id_str) = data.strip_prefix("bypass_session:") {
-            id_str.parse::<i64>().ok().map(|id| (id, ApprovalAction::BypassSession, "🔄 Bypass (sessione)"))
+            id_str.parse::<i64>().ok().map(|id| (id, ApprovalAction::BypassSession, "🔄 Bypass (session)"))
         } else {
             None
         };

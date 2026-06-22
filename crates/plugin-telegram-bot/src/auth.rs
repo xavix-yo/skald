@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use anyhow::Result;
-use chrono::Local;
+use chrono::{DateTime, Local, Utc};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use teloxide::prelude::*;
@@ -51,12 +51,26 @@ pub(crate) async fn save_wl(secrets_dir: &Path, wl: &WhitelistFile) -> Result<()
 
 // ── Pairing ───────────────────────────────────────────────────────────────────
 
+/// Pairing codes older than this are considered abandoned and pruned, so the
+/// whitelist file does not accumulate stale `pending_pairings` entries.
+const PAIRING_TTL_HOURS: i64 = 24;
+
 pub(crate) async fn handle_pairing(bot: &Bot, chat_id: ChatId, shared: &Arc<TgShared>) {
     let mut wl = load_wl(&shared.secrets_dir).await;
 
-    // Re-use existing code if already pending for this chat.
-    let code = if let Some(entry) = wl.pending_pairings.iter().find(|e| e.chat_id == chat_id.0) {
-        entry.code.clone()
+    // Drop pairing codes past their TTL. Entries with an unparseable timestamp
+    // are kept (don't silently lose data on a format change).
+    let cutoff = Utc::now() - chrono::Duration::hours(PAIRING_TTL_HOURS);
+    let before = wl.pending_pairings.len();
+    wl.pending_pairings.retain(|e| match DateTime::parse_from_rfc3339(&e.issued_at) {
+        Ok(ts) => ts.with_timezone(&Utc) > cutoff,
+        Err(_) => true,
+    });
+    let pruned = wl.pending_pairings.len() != before;
+
+    // Re-use an existing (non-expired) code if one is already pending for this chat.
+    let (code, added) = if let Some(entry) = wl.pending_pairings.iter().find(|e| e.chat_id == chat_id.0) {
+        (entry.code.clone(), false)
     } else {
         let code = generate_code();
         wl.pending_pairings.push(PairingEntry {
@@ -64,12 +78,18 @@ pub(crate) async fn handle_pairing(bot: &Bot, chat_id: ChatId, shared: &Arc<TgSh
             chat_id:   chat_id.0,
             issued_at: Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string(),
         });
+        (code, true)
+    };
+
+    // Persist if we added a new code or pruned expired ones.
+    if added || pruned {
         if let Err(e) = save_wl(&shared.secrets_dir, &wl).await {
             error!(error = %e, "telegram: failed to write whitelist file");
         }
+    }
+    if added {
         info!(chat_id = chat_id.0, code = %code, "TELEGRAM PAIRING: code written to telegram_whitelist.json");
-        code
-    };
+    }
 
     bot.send_message(
         chat_id,

@@ -256,8 +256,7 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 }
 
                 // ── Regular LLM message ───────────────────────────────────────
-                let chat_hub = Arc::clone(&skald.chat_hub);
-                let content  = client_msg.content.clone();
+                let content = client_msg.content.clone();
 
                 // Broadcast to all clients on the same source so they see the
                 // user message in real-time (other tabs, mobile, etc.).
@@ -267,21 +266,16 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                     event:      ServerEvent::UserMessage { content: content.clone() },
                 });
 
-                let source_clone = source.clone();
                 let opts = SendMessageOptions {
                     client_name:          client_msg.client.clone(),
                     extra_system_context: Some(WEB_FORMAT_CONTEXT.to_string()),
                     ..Default::default()
                 };
-                tokio::spawn(async move {
-                    if let Err(e) = chat_hub.send_message(&source_clone, &content, opts).await {
-                        if e.to_string().contains("Turn cancelled") {
-                            tracing::info!(source = %source_clone, "send_message: turn cancelled by user");
-                        } else {
-                            tracing::error!(error = %e, source = %source_clone, "send_message failed");
-                        }
-                    }
-                });
+                // send_message only enqueues — the turn runs on ChatHub's per-source
+                // consumer — so awaiting inline keeps this WS read loop responsive.
+                if let Err(e) = skald.chat_hub.send_message(&source, &content, opts).await {
+                    tracing::error!(error = %e, source = %source, "send_message enqueue failed");
+                }
             }
 
             // ── Outbound: event from ChatHub → forward to browser ─────────────

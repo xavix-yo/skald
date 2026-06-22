@@ -1,11 +1,16 @@
-use std::sync::{Arc, Weak};
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use sqlx::SqlitePool;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
+
+mod inbox;
+use inbox::{QueuedMessage, SourceInbox, build_unit};
 
 use crate::core::approval::ApprovalManager;
 use crate::core::cron::TaskManager;
@@ -28,6 +33,12 @@ const NOTIFY_CAPACITY: usize = 64;
 
 // How long to wait after the first notification before draining, to batch bursts.
 const NOTIFY_BATCH_WINDOW_MS: u64 = 200;
+
+// Idle-debounce for per-source message coalescing. 0 = pure coalesce-while-busy
+// (a message to an idle source dispatches immediately). Raise it to also batch
+// messages sent rapidly to an idle source, at the cost of that latency on the
+// first message of a burst.
+const SOURCE_COALESCE_DEBOUNCE_MS: u64 = 0;
 
 // ── ChatHub ───────────────────────────────────────────────────────────────────
 
@@ -53,6 +64,14 @@ pub struct ChatHub {
     /// TaskManager reference for injecting execute_task into interactive sessions.
     /// Set via set_task_mgr() after construction (breaks circular dep with cron).
     task_mgr:    std::sync::OnceLock<Arc<TaskManager>>,
+    /// Per-source input inboxes (coalescing + FIFO ordering). Created lazily on the
+    /// first message for a source; each spawns one consumer task.
+    inboxes:     Mutex<HashMap<String, Arc<SourceInbox>>>,
+    /// Weak self-reference, set in `new()`, so lazily-spawned source consumers can
+    /// reach back into the hub to dispatch turns.
+    me:          OnceLock<Weak<Self>>,
+    /// Shutdown token, used to stop lazily-spawned source consumers.
+    shutdown:    CancellationToken,
 }
 
 impl ChatHub {
@@ -72,7 +91,12 @@ impl ChatHub {
             global_tx,
             notify_tx,
             task_mgr: std::sync::OnceLock::new(),
+            inboxes:  Mutex::new(HashMap::new()),
+            me:       OnceLock::new(),
+            shutdown: shutdown.clone(),
         });
+        // Store a weak self-reference for lazily-spawned source consumers.
+        let _ = hub.me.set(Arc::downgrade(&hub));
 
         // Spawn the background consumer with a Weak reference so it doesn't
         // prevent ChatHub from being dropped on shutdown.
@@ -95,10 +119,50 @@ impl ChatHub {
         info!(source_id, "ChatHub: source registered");
     }
 
-    /// Send a user message for a source, running a full LLM turn.
-    /// Creates a session lazily if none exists yet.
-    /// Events (tool calls, final response, errors) are published to the source's broadcast channel.
+    /// Enqueue a user message for a source. Returns immediately once queued; the
+    /// turn runs asynchronously on the source's consumer task, which coalesces
+    /// messages that pile up during an in-flight turn into a single follow-up turn
+    /// (see `inbox`). Creates the source's inbox (and consumer) lazily on first use.
+    /// Turn errors surface via the `Error` event on the broadcast bus, not this
+    /// return value.
     pub async fn send_message(
+        &self,
+        source_id: &str,
+        prompt:    &str,
+        opts:      SendMessageOptions,
+    ) -> anyhow::Result<()> {
+        let inbox = self.get_or_spawn_inbox(source_id).await;
+        inbox.pending.lock().await.push_back(QueuedMessage {
+            prompt: prompt.to_string(),
+            opts,
+        });
+        inbox.notify.notify_one();
+        Ok(())
+    }
+
+    /// Returns the source's inbox, creating it (and spawning its consumer) on first use.
+    async fn get_or_spawn_inbox(&self, source_id: &str) -> Arc<SourceInbox> {
+        let mut inboxes = self.inboxes.lock().await;
+        if let Some(inbox) = inboxes.get(source_id) {
+            return Arc::clone(inbox);
+        }
+        let inbox = Arc::new(SourceInbox::default());
+        inboxes.insert(source_id.to_string(), Arc::clone(&inbox));
+        let weak = self.me.get().expect("ChatHub::me must be set in new()").clone();
+        tokio::spawn(Self::source_consumer(
+            weak,
+            source_id.to_string(),
+            Arc::clone(&inbox),
+            self.shutdown.clone(),
+        ));
+        info!(source_id, "ChatHub: source inbox + consumer spawned");
+        inbox
+    }
+
+    /// Runs one LLM turn for a coalesced unit: resolves session/handler, bridges
+    /// events to the global bus, injects `execute_task`, and calls `handle_message`
+    /// (which takes the per-session `processing` lock).
+    async fn dispatch_turn(
         &self,
         source_id: &str,
         prompt:    &str,
@@ -164,6 +228,10 @@ impl ChatHub {
         run_context: Option<&crate::core::run_context::RunContext>,
         reset:       bool,
     ) -> anyhow::Result<i64> {
+        // A reset discards the current session; drop any messages queued for it.
+        if reset {
+            self.clear_inbox(source_id).await;
+        }
         if !reset {
             if let Some(sid) = sources::active_session_id(&self.db, source_id).await? {
                 return Ok(sid);
@@ -290,6 +358,9 @@ impl ChatHub {
     /// Cancel the active LLM turn for the source's session, clearing any pending
     /// approvals and clarification questions. No-op if no session is active.
     pub async fn cancel(&self, source_id: &str) {
+        // Drop queued-but-not-yet-dispatched messages so /stop clears the backlog
+        // too, not just the in-flight turn.
+        self.clear_inbox(source_id).await;
         match self.session_handler(source_id).await {
             Ok(handler) => {
                 handler.cancel();
@@ -346,6 +417,63 @@ impl ChatHub {
         sources::upsert(&self.db, source_id, session_id).await?;
         info!(source_id, session_id, "ChatHub: session created lazily");
         Ok(session_id)
+    }
+
+    // ── Per-source inbox consumer ─────────────────────────────────────────────
+
+    /// Per-source consumer: drains and coalesces queued messages, running one turn
+    /// at a time. Spawned lazily by `get_or_spawn_inbox`; lives until shutdown.
+    async fn source_consumer(
+        hub:       Weak<Self>,
+        source_id: String,
+        inbox:     Arc<SourceInbox>,
+        shutdown:  CancellationToken,
+    ) {
+        info!(%source_id, "ChatHub: source consumer started");
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled()      => break,
+                _ = inbox.notify.notified()   => {}
+            }
+
+            // Optional idle-batching window (0 = disabled).
+            if SOURCE_COALESCE_DEBOUNCE_MS > 0 {
+                tokio::time::sleep(Duration::from_millis(SOURCE_COALESCE_DEBOUNCE_MS)).await;
+            }
+
+            // Drain and dispatch units until the queue is empty. Messages that arrive
+            // while a turn runs accumulate in `pending` and are coalesced on the next
+            // iteration (coalesce-while-busy).
+            loop {
+                let (unit, epoch) = {
+                    let mut pending = inbox.pending.lock().await;
+                    let epoch = inbox.cancel_epoch.load(Ordering::Acquire);
+                    (build_unit(&mut pending), epoch)
+                };
+                let Some((prompt, opts)) = unit else { break };
+                let Some(hub) = hub.upgrade() else { return };
+
+                // A /stop between draining and dispatching bumps cancel_epoch and
+                // clears pending — drop this now-stale unit.
+                if inbox.cancel_epoch.load(Ordering::Acquire) != epoch {
+                    continue;
+                }
+                if let Err(e) = hub.dispatch_turn(&source_id, &prompt, opts).await {
+                    error!(%source_id, error = %e, "ChatHub: source turn failed");
+                }
+            }
+        }
+        info!(%source_id, "ChatHub: source consumer stopped");
+    }
+
+    /// Clears a source's pending queue and bumps its cancel epoch (so a unit the
+    /// consumer drained just before a `/stop` is dropped instead of dispatched).
+    /// No-op if the source has no inbox yet.
+    async fn clear_inbox(&self, source_id: &str) {
+        if let Some(inbox) = self.inboxes.lock().await.get(source_id) {
+            inbox.pending.lock().await.clear();
+            inbox.cancel_epoch.fetch_add(1, Ordering::Release);
+        }
     }
 
     // ── Notification consumer ─────────────────────────────────────────────────

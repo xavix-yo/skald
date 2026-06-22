@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
 """Google Calendar MCP server (JSON-RPC 2.0 over stdio).
 
-Capabilities: list_calendars, list_events, get_event (read-only),
-              create_event, update_event, delete_event, respond_to_event (write).
+Capabilities (callable as `mcp__gcal__<tool>`):
+  status          — self-check: credentials, token refresh, API reachability
+  list_calendars  — list calendars accessible to the user
+  list_events     — chronological event listing with optional filters
+  get_event       — read a single event by ID
+  create_event    — create an event
+  update_event    — patch fields of an existing event
+  delete_event    — permanently delete an event
+  respond_to_event — set RSVP / attendance response
 
 Credentials are read from ./secrets/google_creds.json by default.
 Override with GOOGLE_CREDS_PATH env var.
@@ -22,7 +29,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 # Log to stderr so stdout stays clean for JSON-RPC.
 def log(msg: str) -> None:
@@ -81,46 +88,58 @@ def _poll_once() -> None:
     _last_poll_at = _utc_now_iso()  # advance cursor before the call (safe: we only advance)
 
     try:
-        result = svc.events().list(
+        result = _call(lambda: svc.events().list(
             calendarId="primary",
             updatedMin=since,
             singleEvents=True,
             orderBy="updated",
             maxResults=50,
-        ).execute()
-
-        for ev in result.get("items", []):
-            # Emit only events that were newly *created* in this window (not just modified).
-            created = ev.get("created", "")
-            if created < since:
-                continue
-            start = ev.get("start") or {}
-            end   = ev.get("end")   or {}
-            _emit_notification("event/new_calendar_event", {
-                "event_id":    ev.get("id"),
-                "summary":     ev.get("summary", "(no title)"),
-                "start":       start.get("dateTime") or start.get("date"),
-                "end":         end.get("dateTime")   or end.get("date"),
-                "location":    ev.get("location"),
-                "description": (ev.get("description") or "")[:500],
-                "html_link":   ev.get("htmlLink"),
-                "created":     created,
-            })
-            log(f"Notification emitted: new calendar event {ev.get('id')!r} — {ev.get('summary')!r}")
-
+        ).execute(), "Calendar")
     except Exception as e:
-        log(f"GCal poll error: {e}")
+        log(f"GCal poll error: {_format_google_error(e, 'Calendar')}")
+        return
+
+    for ev in result.get("items", []):
+        # Emit only events that were newly *created* in this window (not just modified).
+        created = ev.get("created", "")
+        if created < since:
+            continue
+        start = ev.get("start") or {}
+        end   = ev.get("end")   or {}
+        _emit_notification("event/new_calendar_event", {
+            "event_id":    ev.get("id"),
+            "summary":     ev.get("summary", "(no title)"),
+            "start":       start.get("dateTime") or start.get("date"),
+            "end":         end.get("dateTime")   or end.get("date"),
+            "location":    ev.get("location"),
+            "description": (ev.get("description") or "")[:500],
+            "html_link":   ev.get("htmlLink"),
+            "created":     created,
+        })
+        log(f"Notification emitted: new calendar event {ev.get('id')!r} — {ev.get('summary')!r}")
 
 
 # ── Credentials / service ──────────────────────────────────────────────────────
 
 _service = None
+_creds = None
+_creds_path: str | None = None
 _init_error: str | None = None
+
+
+def _persist_creds() -> None:
+    """Write the current credentials back to disk (used after a token refresh)."""
+    if _creds is not None and _creds_path:
+        try:
+            with open(_creds_path, "w") as f:
+                f.write(_creds.to_json())
+        except Exception as e:
+            log(f"Could not persist refreshed credentials: {e}")
 
 
 def _build_service() -> Any:
     """Build and return a Google Calendar service object, or None on failure."""
-    global _init_error
+    global _init_error, _creds, _creds_path
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials
@@ -130,33 +149,34 @@ def _build_service() -> Any:
         log(_init_error)
         return None
 
-    creds_path = os.environ.get(
+    _creds_path = os.environ.get(
         "GOOGLE_CREDS_PATH",
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "secrets", "google_creds.json"),
     )
 
-    if not os.path.exists(creds_path):
+    if not os.path.exists(_creds_path):
         _init_error = (
-            f"Credentials file not found at {creds_path}. "
+            f"Credentials file not found at {_creds_path}. "
             "Run scripts/gcal_oauth_setup.py to authenticate, or set GOOGLE_CREDS_PATH."
         )
         log(_init_error)
         return None
 
     try:
-        creds = Credentials.from_authorized_user_file(creds_path)
+        creds = Credentials.from_authorized_user_file(_creds_path)
     except Exception as e:
-        _init_error = f"Failed to load credentials from {creds_path}: {e}"
+        _init_error = f"Failed to load credentials from {_creds_path}: {e}"
         log(_init_error)
         return None
 
-    # Refresh expired token automatically.
+    # Publish creds globally so _persist_creds / _call can see them.
+    _creds = creds
+
+    # Refresh expired token automatically at startup.
     if creds.expired and creds.refresh_token:
         try:
-            from google.auth.transport.requests import Request
             creds.refresh(Request())
-            with open(creds_path, "w") as f:
-                f.write(creds.to_json())
+            _persist_creds()
             log("Token refreshed and saved.")
         except Exception as e:
             log(f"Token refresh failed: {e}")
@@ -168,7 +188,7 @@ def _build_service() -> Any:
         log(_init_error)
         return None
 
-    log(f"Calendar service built successfully (creds: {creds_path})")
+    log(f"Calendar service built successfully (creds: {_creds_path})")
     return service
 
 
@@ -179,18 +199,157 @@ def _get_service() -> Any:
     return _service
 
 
+# ── Error mapping & refresh-on-auth-error ──────────────────────────────────────
+
+
+def _is_auth_error(e: Exception) -> bool:
+    """True for 401 HttpError / RefreshError — candidates for a refresh+retry."""
+    try:
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        return False
+    if isinstance(e, HttpError):
+        return getattr(e, "status_code", None) == 401
+    try:
+        from google.auth.exceptions import RefreshError
+    except ImportError:
+        return False
+    return isinstance(e, RefreshError)
+
+
+def _call(fn: Callable[[], Any], api_label: str) -> Any:
+    """Run a googleapiclient call with one refresh-on-auth-error retry.
+
+    If the access token expired mid-session the first call raises a 401 HttpError
+    or a RefreshError. We refresh once, persist the new token, and retry the call.
+    Anything else (or a second failure) is re-raised so the caller can format it
+    via _format_google_error.
+    """
+    try:
+        return fn()
+    except Exception as e:
+        if not _is_auth_error(e) or _creds is None or not getattr(_creds, "refresh_token", None):
+            raise
+        try:
+            from google.auth.transport.requests import Request
+            _creds.refresh(Request())
+            _persist_creds()
+            log("Access token refreshed mid-session after auth error; retrying the call.")
+        except Exception as refresh_err:
+            log(f"Mid-session token refresh failed: {refresh_err}")
+            raise
+        return fn()
+
+
+def _http_error_reason(e: Exception) -> str:
+    """Best-effort short reason string from an HttpError (for 400/4xx detail)."""
+    return str(e).strip().replace("\n", " ")[:200]
+
+
+def _format_google_error(e: Exception, api_label: str) -> str:
+    """Map a googleapiclient / google-auth exception into an actionable Error: string."""
+    try:
+        from googleapiclient.errors import HttpError
+    except ImportError:
+        HttpError = None  # type: ignore
+    try:
+        from google.auth.exceptions import RefreshError
+    except ImportError:
+        RefreshError = None  # type: ignore
+
+    if RefreshError is not None and isinstance(e, RefreshError):
+        return (
+            f"Error: {api_label} API token refresh failed (the refresh token may have been revoked "
+            "or expired). Re-run scripts/gcal_oauth_setup.py to re-authenticate."
+        )
+
+    if HttpError is not None and isinstance(e, HttpError):
+        status = getattr(e, "status_code", None)
+        if status == 401:
+            return (
+                f"Error: {api_label} API rejected the access token (401). The OAuth token is invalid "
+                "or revoked. Re-run scripts/gcal_oauth_setup.py to re-authenticate."
+            )
+        if status == 403:
+            return (
+                f"Error: {api_label} API returned 403 Forbidden. The OAuth scopes granted are "
+                "insufficient for this operation, or the Calendar API is disabled in the Google Cloud "
+                "Console. Verify the scopes in scripts/gcal_oauth_setup.py and the API enablement."
+            )
+        if status == 404:
+            return (
+                f"Error: {api_label} API returned 404 Not Found. Check the event/calendar ID and the "
+                "calendar_id parameter."
+            )
+        if status == 429:
+            return f"Error: {api_label} API rate limit exceeded (429). Wait a moment and retry."
+        if status == 400:
+            return (
+                f"Error: {api_label} API rejected the request as invalid (400). Check the parameters. "
+                f"Detail: {_http_error_reason(e)}"
+            )
+        if status is not None and 500 <= status < 600:
+            return f"Error: {api_label} API returned a server error (HTTP {status}). Retry in a moment."
+        return f"Error: {api_label} API call failed (HTTP {status}). Detail: {_http_error_reason(e)}"
+
+    return f"Error: {api_label} API call failed: {e}"
+
+
+def _status_report(icon: str, label: str, kind: str, description: str, steps: list[str] | None = None) -> str:
+    lines = [f"Status: {label} {icon} ({kind})", description]
+    if steps:
+        lines.append("")
+        lines.append("What to do:")
+        for i, s in enumerate(steps, 1):
+            lines.append(f"{i}. {s}")
+    return "\n".join(lines)
+
+
 # ── Tool implementations ───────────────────────────────────────────────────────
 
 
-def _list_calendars(args: dict | None = None) -> str:
+def _gcal_status(args: dict | None = None) -> str:
+    """Self-check: credentials load, the token refreshes when needed, and the API answers.
+
+    Performs one cheap calendarList().list(maxResults=1) probe so we exercise key
+    validation, the OAuth token, the network, and the Calendar API in a single call.
+    """
+    # Step 1: deps + creds file + service build.
+    svc = _get_service()
+    if svc is None:
+        return _status_report("❌", "NOT_CONFIGURED", "action needed",
+            f"The Google Calendar service could not be built: {_init_error or 'unknown error'}.",
+            ["Run scripts/gcal_oauth_setup.py to authenticate and create secrets/google_creds.json.",
+             "Or set the GOOGLE_CREDS_PATH env var to point at an existing credentials file."])
+
+    # Step 2: live probe — refresh-on-auth-error is handled inside _call.
+    try:
+        result = _call(lambda: svc.calendarList().list(maxResults=1).execute(), "Calendar")
+    except Exception as e:
+        return _status_report("❌", "AUTH_OR_API_ERROR", "action needed",
+            f"The Calendar API did not respond to the probe call: {_format_google_error(e, 'Calendar')}",
+            ["Run scripts/gcal_oauth_setup.py to refresh / re-issue credentials.",
+             "If credentials are valid, verify the Google Calendar API is enabled in the Google Cloud Console."])
+
+    items = result.get("items", []) if isinstance(result, dict) else []
+    primary = next((c for c in items if c.get("primary")), None)
+    suffix = f"\nAccount: {primary.get('id')}" if primary else ""
+
+    return _status_report("✅", "READY", "ok",
+        "Google Calendar integration is operational: credentials load, the access token refreshes "
+        "automatically, and the Calendar API responds. All tools (list/get/create/update/delete/RSVP) "
+        "are usable." + suffix)
+
+
+def _gcal_list_calendars(args: dict | None = None) -> str:
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
 
     try:
-        result = svc.calendarList().list().execute()
+        result = _call(lambda: svc.calendarList().list().execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to list calendars: {e}"
+        return _format_google_error(e, "Calendar")
 
     items = result.get("items", [])
     if not items:
@@ -205,7 +364,7 @@ def _list_calendars(args: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _list_events(args: dict) -> str:
+def _gcal_list_events(args: dict) -> str:
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
@@ -237,9 +396,9 @@ def _list_events(args: dict) -> str:
         params["q"] = full_text
 
     try:
-        result = svc.events().list(**params).execute()
+        result = _call(lambda: svc.events().list(**params).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to list events: {e}"
+        return _format_google_error(e, "Calendar")
 
     items = result.get("items", [])
     if not items:
@@ -259,7 +418,7 @@ def _list_events(args: dict) -> str:
     return "\n".join(lines)
 
 
-def _get_event(args: dict) -> str:
+def _gcal_get_event(args: dict) -> str:
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
@@ -271,9 +430,9 @@ def _get_event(args: dict) -> str:
     calendar_id = args.get("calendar_id", "primary")
 
     try:
-        result = svc.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        result = _call(lambda: svc.events().get(calendarId=calendar_id, eventId=event_id).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to get event: {e}"
+        return _format_google_error(e, "Calendar")
 
     summary = result.get("summary", "(no title)")
     description = result.get("description", "(no description)")
@@ -300,7 +459,7 @@ def _get_event(args: dict) -> str:
     return "\n".join(lines)
 
 
-def _create_event(args: dict) -> str:
+def _gcal_create_event(args: dict) -> str:
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
@@ -344,26 +503,30 @@ def _create_event(args: dict) -> str:
 
     reminders_raw = args.get("reminders")
     if reminders_raw is not None:
-        # Accept both list-of-dicts and list-of-minutes (popup only).
-        overrides = []
-        for r in reminders_raw:
-            if isinstance(r, dict):
-                overrides.append({"method": r.get("method", "popup"), "minutes": int(r.get("minutes", 10))})
-            else:
-                overrides.append({"method": "popup", "minutes": int(r)})
-        body["reminders"] = {"useDefault": False, "overrides": overrides}
+        body["reminders"] = _build_reminders(reminders_raw)
 
     try:
-        result = svc.events().insert(calendarId=calendar_id, body=body).execute()
+        result = _call(lambda: svc.events().insert(calendarId=calendar_id, body=body).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to create event: {e}"
+        return _format_google_error(e, "Calendar")
 
     ev_id = result.get("id", "?")
     link = result.get("htmlLink", "")
-    return f"Event created: {summary}\n  ID: {ev_id}\n  Link: {link}"
+    return f"✅ Event created: {summary}\n  ID: {ev_id}\n  Link: {link}"
 
 
-def _update_event(args: dict) -> str:
+def _build_reminders(reminders_raw: list) -> dict:
+    """Accept both list-of-dicts and list-of-minutes (popup only)."""
+    overrides = []
+    for r in reminders_raw:
+        if isinstance(r, dict):
+            overrides.append({"method": r.get("method", "popup"), "minutes": int(r.get("minutes", 10))})
+        else:
+            overrides.append({"method": "popup", "minutes": int(r)})
+    return {"useDefault": False, "overrides": overrides}
+
+
+def _gcal_update_event(args: dict) -> str:
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
@@ -377,9 +540,9 @@ def _update_event(args: dict) -> str:
 
     # Fetch the existing event so we can patch only what changed.
     try:
-        existing = svc.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        existing = _call(lambda: svc.events().get(calendarId=calendar_id, eventId=event_id).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to fetch event for update: {e}"
+        return _format_google_error(e, "Calendar")
 
     def _time_obj(value: str, tz: str) -> dict:
         if "T" in value:
@@ -399,24 +562,18 @@ def _update_event(args: dict) -> str:
     if args.get("attendees") is not None:
         existing["attendees"] = [{"email": e} for e in args["attendees"]]
     if args.get("reminders") is not None:
-        overrides = []
-        for r in args["reminders"]:
-            if isinstance(r, dict):
-                overrides.append({"method": r.get("method", "popup"), "minutes": int(r.get("minutes", 10))})
-            else:
-                overrides.append({"method": "popup", "minutes": int(r)})
-        existing["reminders"] = {"useDefault": False, "overrides": overrides}
+        existing["reminders"] = _build_reminders(args["reminders"])
 
     try:
-        result = svc.events().update(calendarId=calendar_id, eventId=event_id, body=existing).execute()
+        result = _call(lambda: svc.events().update(calendarId=calendar_id, eventId=event_id, body=existing).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to update event: {e}"
+        return _format_google_error(e, "Calendar")
 
     summary = result.get("summary", event_id)
-    return f"Event updated: {summary}\n  ID: {event_id}"
+    return f"✅ Event updated: {summary}\n  ID: {event_id}"
 
 
-def _delete_event(args: dict) -> str:
+def _gcal_delete_event(args: dict) -> str:
     svc = _get_service()
     if svc is None:
         return f"Error: {_init_error}"
@@ -428,14 +585,14 @@ def _delete_event(args: dict) -> str:
     calendar_id = args.get("calendar_id", "primary")
 
     try:
-        svc.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+        _call(lambda: svc.events().delete(calendarId=calendar_id, eventId=event_id).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to delete event: {e}"
+        return _format_google_error(e, "Calendar")
 
-    return f"Event {event_id} deleted successfully."
+    return f"✅ Event {event_id} deleted."
 
 
-def _respond_to_event(args: dict) -> str:
+def _gcal_respond_to_event(args: dict) -> str:
     """RSVP to an event by updating the self attendee status."""
     svc = _get_service()
     if svc is None:
@@ -453,9 +610,9 @@ def _respond_to_event(args: dict) -> str:
     calendar_id = args.get("calendar_id", "primary")
 
     try:
-        existing = svc.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        existing = _call(lambda: svc.events().get(calendarId=calendar_id, eventId=event_id).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to fetch event: {e}"
+        return _format_google_error(e, "Calendar")
 
     attendees = existing.get("attendees", [])
     updated = False
@@ -469,7 +626,7 @@ def _respond_to_event(args: dict) -> str:
         # No self attendee found — add one.
         # We need the authenticated user's email; fetch it from settings.
         try:
-            cal_info = svc.calendars().get(calendarId="primary").execute()
+            cal_info = _call(lambda: svc.calendars().get(calendarId="primary").execute(), "Calendar")
             self_email = cal_info.get("id", "")
         except Exception:
             self_email = ""
@@ -480,26 +637,46 @@ def _respond_to_event(args: dict) -> str:
             return "Error: Could not determine your email to set RSVP."
 
     try:
-        result = svc.events().patch(
+        result = _call(lambda: svc.events().patch(
             calendarId=calendar_id,
             eventId=event_id,
             body={"attendees": existing["attendees"]},
             sendUpdates="none",
-        ).execute()
+        ).execute(), "Calendar")
     except Exception as e:
-        return f"Error: Failed to update RSVP: {e}"
+        return _format_google_error(e, "Calendar")
 
     summary = result.get("summary", event_id)
-    return f"RSVP set to '{response}' for event: {summary}"
+    return f"✅ RSVP set to '{response}' for event: {summary}"
 
 
 # ── Tool manifest ──────────────────────────────────────────────────────────────
 
+_REMINDER_ITEM_SCHEMA = {
+    "type": ["integer", "object"],
+    "description": "A reminder: either an integer (minutes before the event, popup) or an object.",
+}
+_REMINDER_ITEM_DESCRIPTION = (
+    "Optional custom reminders. Pass integers for popup reminders (e.g. [10, 30, 60]) "
+    "or dicts for full control ([{'method': 'popup', 'minutes': 10}]). Overrides calendar defaults."
+)
+
 TOOLS = [
+    # ── Self-check ─────────────────────────────────────────────────────────────
+    {
+        "name": "status",
+        "description": (
+            "Self-check that the Google Calendar integration is operational: verifies the OAuth "
+            "credentials load, the access token refreshes when needed, and the Calendar API responds, "
+            "by performing one cheap calendarList probe. Call this first whenever another gcal tool "
+            "fails, or to give the user a quick yes/no on whether Calendar is usable right now."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
     # ── Read-only ──────────────────────────────────────────────────────────────
     {
         "name": "list_calendars",
-        "description": "Lists all calendars accessible to the authenticated user.",
+        "description": "Lists all calendars accessible to the authenticated user. Use it to discover calendar_id values to pass to the other gcal tools.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {
@@ -542,7 +719,7 @@ TOOLS = [
     },
     {
         "name": "get_event",
-        "description": "Returns a single calendar event by ID.",
+        "description": "Returns a single calendar event by ID, including attendees with their RSVP status.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -562,7 +739,7 @@ TOOLS = [
     {
         "name": "create_event",
         "description": (
-            "Creates a new event in the specified calendar. "
+            "Creates a new event in the specified calendar and returns its ID + HTML link. "
             "Use ISO 8601 for start/end (e.g. '2025-06-15T10:00:00' for timed events, "
             "'2025-06-15' for all-day events)."
         ),
@@ -609,19 +786,8 @@ TOOLS = [
                 },
                 "reminders": {
                     "type": "array",
-                    "items": {
-                        "oneOf": [
-                            {"type": "integer", "description": "Minutes before event for a popup reminder."},
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "method": {"type": "string", "enum": ["popup", "email"], "description": "Reminder method. Default 'popup'."},
-                                    "minutes": {"type": "integer", "description": "Minutes before the event."},
-                                },
-                            },
-                        ],
-                    },
-                    "description": "Optional custom reminders. Pass integers for popup reminders (e.g. [10, 30, 60]) or dicts for full control ([{'method': 'popup', 'minutes': 10}]). Overrides calendar defaults.",
+                    "items": _REMINDER_ITEM_SCHEMA,
+                    "description": _REMINDER_ITEM_DESCRIPTION,
                 },
             },
             "required": ["summary", "start", "end"],
@@ -630,8 +796,8 @@ TOOLS = [
     {
         "name": "update_event",
         "description": (
-            "Updates an existing event. Only fields provided are changed; "
-            "omitted fields keep their current values."
+            "Updates an existing event. Only fields provided are changed; omitted fields keep their "
+            "current values. Returns the updated event ID."
         ),
         "inputSchema": {
             "type": "object",
@@ -660,19 +826,8 @@ TOOLS = [
                 },
                 "reminders": {
                     "type": "array",
-                    "items": {
-                        "oneOf": [
-                            {"type": "integer", "description": "Minutes before event for a popup reminder."},
-                            {
-                                "type": "object",
-                                "properties": {
-                                    "method": {"type": "string", "enum": ["popup", "email"], "description": "Reminder method. Default 'popup'."},
-                                    "minutes": {"type": "integer", "description": "Minutes before the event."},
-                                },
-                            },
-                        ],
-                    },
-                    "description": "Optional custom reminders. Pass integers for popup reminders (e.g. [10, 30, 60]) or dicts for full control ([{'method': 'popup', 'minutes': 10}]). Overrides calendar defaults.",
+                    "items": _REMINDER_ITEM_SCHEMA,
+                    "description": _REMINDER_ITEM_DESCRIPTION,
                 },
             },
             "required": ["event_id"],
@@ -680,7 +835,7 @@ TOOLS = [
     },
     {
         "name": "delete_event",
-        "description": "Permanently deletes a calendar event.",
+        "description": "Permanently deletes a calendar event. Irreversible.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -698,7 +853,7 @@ TOOLS = [
     },
     {
         "name": "respond_to_event",
-        "description": "Set your RSVP / attendance response for a calendar event.",
+        "description": "Set your RSVP / attendance response (accepted, declined, tentative, needsAction) for a calendar event.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -725,13 +880,14 @@ TOOLS = [
 # ── JSON-RPC dispatch ──────────────────────────────────────────────────────────
 
 TOOL_DISPATCH = {
-    "list_calendars": _list_calendars,
-    "list_events": _list_events,
-    "get_event": _get_event,
-    "create_event": _create_event,
-    "update_event": _update_event,
-    "delete_event": _delete_event,
-    "respond_to_event": _respond_to_event,
+    "status":          _gcal_status,
+    "list_calendars":  _gcal_list_calendars,
+    "list_events":     _gcal_list_events,
+    "get_event":       _gcal_get_event,
+    "create_event":    _gcal_create_event,
+    "update_event":    _gcal_update_event,
+    "delete_event":    _gcal_delete_event,
+    "respond_to_event": _gcal_respond_to_event,
 }
 
 
@@ -760,7 +916,7 @@ def handle_request(msg: dict) -> str | None:
             "capabilities": {"tools": {}},
             "serverInfo": {
                 "name": "gcal",
-                "version": "0.2.0",
+                "version": "0.3.0",
             },
         })
 
@@ -777,7 +933,7 @@ def handle_request(msg: dict) -> str | None:
 
         handler = TOOL_DISPATCH.get(tool_name)
         if handler is None:
-            return _text_result(req_id, f"Unknown tool: {tool_name}", is_error=True)
+            return _text_result(req_id, f"Error: Unknown tool: {tool_name}", is_error=True)
 
         try:
             text = handler(tool_args)

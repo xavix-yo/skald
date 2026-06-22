@@ -12,6 +12,7 @@ This includes:
 - Adding a new agent → update [agents.md](agents.md)
 - Any change to the WS protocol → update [frontend.md](frontend.md)
 - Changing the project/ticket lifecycle or project chats → update [projects.md](projects.md)
+- Changing ChatHub dispatch, the per-source inbox/coalescing, or `/stop`/`/clear` semantics → update [chat-hub.md](chat-hub.md)
 
 ---
 
@@ -81,7 +82,7 @@ To add a new extracted crate: create `crates/<name>/`, add it to the `[workspace
 | `src/core/chat_event_bus.rs` | In-process broadcast bus for chat turns and compaction events | [chat-event-bus.md](chat-event-bus.md) |
 | `src/core/compactor.rs` | Context compaction — summarises old history to reduce token usage | [compaction.md](compaction.md) |
 | `src/core/memory/` | Pluggable long-term memory layer (trait + manager) | [memory.md](memory.md) |
-| `src/core/chat_hub/` | Central chat orchestrator for **interactive, user-facing sessions only** (web, mobile, project chats — one persistent session per source via the `sources` table); notification pipeline. `provision_session(source, agent_id, rc, reset)` is the single source→session entry point; `clear()` is a thin `main`-agent wrapper over it. **Not** for background agents (cron/TIC/sub-agents → `TaskManager`/`ChatSessionManager`) | [architecture.md](architecture.md) |
+| `src/core/chat_hub/` | Central chat orchestrator for **interactive, user-facing sessions only** (web, mobile, project chats — one persistent session per source via the `sources` table); per-source coalescing inbox; notification pipeline. `provision_session(source, agent_id, rc, reset)` is the single source→session entry point; `clear()` is a thin `main`-agent wrapper over it. **Not** for background agents (cron/TIC/sub-agents → `TaskManager`/`ChatSessionManager`) | [chat-hub.md](chat-hub.md) |
 | `src/core/tic/` | Background MCP event processor (TicManager) | [architecture.md](architecture.md) |
 | `src/core/mcp/` | MCP server management, push notification ingestion | [mcp.md](mcp.md) |
 | `src/core/cron/` | Scheduled job scheduler | [cron.md](cron.md) |

@@ -39,7 +39,7 @@ fn send_attachment_tool(bot: Bot, chat_id: ChatId) -> InterfaceTool {
             "type": "function",
             "function": {
                 "name": "send_attachment",
-                "description": "Send a file from the local filesystem to the user on Telegram.",
+                "description": "Send a file from the local filesystem to the user on Telegram. Images (jpg/png/webp) and videos (mp4/mov/webm) are sent inline by default; any other type is sent as a document. Set as_document=true to force sending as a downloadable file.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -50,6 +50,10 @@ fn send_attachment_tool(bot: Bot, chat_id: ChatId) -> InterfaceTool {
                         "caption": {
                             "type":        "string",
                             "description": "Optional caption shown below the file."
+                        },
+                        "as_document": {
+                            "type":        "boolean",
+                            "description": "Force sending as a downloadable file instead of an inline photo/video (default false)."
                         }
                     },
                     "required": ["file_path"]
@@ -62,20 +66,51 @@ fn send_attachment_tool(bot: Bot, chat_id: ChatId) -> InterfaceTool {
                 let file_path = args["file_path"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("send_attachment: missing `file_path`"))?;
-                let caption = args["caption"].as_str().map(str::to_string);
+                let caption     = args["caption"].as_str().map(str::to_string);
+                let as_document = args["as_document"].as_bool().unwrap_or(false);
 
                 let path = std::path::Path::new(file_path);
                 if !path.exists() {
                     anyhow::bail!("send_attachment: file not found: {file_path}");
                 }
 
-                let mut req = bot.send_document(chat_id, InputFile::file(path));
-                if let Some(cap) = caption {
-                    req = req.caption(cap);
-                }
+                // Present images/videos inline by default; everything else (and
+                // anything when as_document=true) as a downloadable document.
+                let ext = path.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let kind = if as_document {
+                    "document"
+                } else {
+                    match ext.as_str() {
+                        "jpg" | "jpeg" | "png" | "webp" => "photo",
+                        "mp4" | "mov" | "webm"          => "video",
+                        _                               => "document",
+                    }
+                };
 
-                req.await.map_err(|e| anyhow::anyhow!("send_attachment: Telegram error: {e}"))?;
-                Ok(format!("File sent: {file_path}"))
+                let file = InputFile::file(path);
+                let result = match kind {
+                    "photo" => {
+                        let mut req = bot.send_photo(chat_id, file);
+                        if let Some(cap) = caption { req = req.caption(cap); }
+                        req.await.map(|_| ())
+                    }
+                    "video" => {
+                        let mut req = bot.send_video(chat_id, file);
+                        if let Some(cap) = caption { req = req.caption(cap); }
+                        req.await.map(|_| ())
+                    }
+                    _ => {
+                        let mut req = bot.send_document(chat_id, file);
+                        if let Some(cap) = caption { req = req.caption(cap); }
+                        req.await.map(|_| ())
+                    }
+                };
+
+                result.map_err(|e| anyhow::anyhow!("send_attachment: Telegram error: {e}"))?;
+                Ok(format!("File sent ({kind}): {file_path}"))
             })
         }),
     }

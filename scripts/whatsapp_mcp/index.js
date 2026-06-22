@@ -27,11 +27,24 @@ const SECRETS_DIR  = path.join(PROJECT_ROOT, 'secrets');
 const DATA_DIR     = path.join(PROJECT_ROOT, 'data');
 const SESSION_DIR  = path.join(SECRETS_DIR, 'whatsapp_session');
 const QR_FILE      = path.join(SECRETS_DIR, 'whatsapp_qr.txt');
+const MEDIA_DIR    = path.join(DATA_DIR, 'whatsapp_media');
 
 // ── Logging ────────────────────────────────────────────────────────────────
 
 function log(msg) {
   process.stderr.write(`[whatsapp_mcp] ${msg}\n`);
+}
+
+// ── QR artifact cleanup ──────────────────────────────────────────────────────
+// Remove every QR file we may have written (PNG, HTML, ASCII fallback) so a
+// stale code is never served after auth succeeds or the session is reset.
+
+function cleanupQrFiles() {
+  const QR_HTML = path.join(SECRETS_DIR, 'whatsapp_qr.html');
+  const QR_PNG  = path.join(DATA_DIR, 'whatsapp_qr.png');
+  for (const f of [QR_FILE, QR_HTML, QR_PNG]) {
+    try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {}
+  }
 }
 
 // ── JSON-RPC notification helper ───────────────────────────────────────────
@@ -126,11 +139,7 @@ img{border:12px solid white;border-radius:8px;}</style></head>
   client.on('authenticated', () => {
     state = 'AUTHENTICATED';
     lastQrStr = null;
-    const QR_HTML = path.join(SECRETS_DIR, 'whatsapp_qr.html');
-    const QR_PNG  = path.join(DATA_DIR, 'whatsapp_qr.png');
-    if (fs.existsSync(QR_FILE))  fs.unlinkSync(QR_FILE);
-    if (fs.existsSync(QR_HTML))  fs.unlinkSync(QR_HTML);
-    if (fs.existsSync(QR_PNG))   fs.unlinkSync(QR_PNG);
+    cleanupQrFiles();
     log('Authenticated successfully');
   });
 
@@ -184,7 +193,7 @@ function requireReady() {
   if (state !== 'READY') {
     return `WhatsApp not ready (status: ${state}).${
       state === 'QR_READY'
-        ? ' Use whatsapp_get_qr to retrieve the QR code and scan it with your phone.'
+        ? ' Use get_qr to retrieve the QR code and scan it with your phone.'
         : state === 'INITIALIZING'
         ? ' Please wait a moment and try again.'
         : ''
@@ -197,13 +206,174 @@ function formatTimestamp(unixSec) {
   return new Date(unixSec * 1000).toISOString().replace('T', ' ').slice(0, 19);
 }
 
+// Resolve the target chat from either an explicit chat_id or a raw phone
+// number. Accepting a number removes the list_chats/search_contacts round-trip
+// the agent otherwise needs just to message someone. Returns { id } on success
+// or { error } with a ready-to-return message. Numbers only address individual
+// contacts — groups must be passed as a chat_id.
+async function resolveChatId(args) {
+  if (args.chat_id) return { id: String(args.chat_id) };
+  if (args.number) {
+    const digits = String(args.number).replace(/\D/g, '');
+    if (!digits) return { error: 'Error: `number` has no digits.' };
+    const wid = await client.getNumberId(digits);
+    if (!wid) return { error: `Error: ${args.number} is not a WhatsApp number.` };
+    return { id: wid._serialized };
+  }
+  return { error: 'Error: provide either chat_id or number.' };
+}
+
+// Map a MIME type to a file extension for saved media (fallback: 'bin').
+function extFromMime(mime) {
+  if (!mime) return 'bin';
+  const map = {
+    'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
+    'video/mp4': 'mp4', 'audio/ogg': 'ogg', 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a',
+    'application/pdf': 'pdf',
+  };
+  return map[mime] || (mime.split('/')[1] || 'bin').split(';')[0];
+}
+
 // ── Tool implementations ───────────────────────────────────────────────────
 
+// Build a clear, LLM-actionable status report: the state, a plain-language
+// description of what it means, and concrete next steps whenever it is not
+// fully operational. Our lifecycle `state` is event-driven and can lag behind a
+// silent socket drop, so when we believe we are connected we confirm against
+// the live socket state (`client.getState()` → WAState) and surface any mismatch.
 async function toolStatus() {
-  const qrNote = state === 'QR_READY'
-    ? '\nQR code available at secrets/whatsapp_qr.txt — use whatsapp_get_qr to retrieve it.'
-    : '';
-  return `Status: ${state}${qrNote}`;
+  let liveState = null;   // WAState string, or null
+  let liveErr   = false;  // getState() threw (page/browser gone)
+  if (client && state === 'READY') {
+    try {
+      liveState = await client.getState();
+    } catch (_) {
+      liveErr = true;
+    }
+  }
+
+  const report = (icon, label, kind, description, steps) => {
+    const lines = [`Status: ${label} ${icon} (${kind})`, description];
+    if (steps && steps.length) {
+      lines.push('', 'What to do:');
+      steps.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+    }
+    return lines.join('\n');
+  };
+
+  // ── Fully operational ──
+  if (state === 'READY' && (liveState === 'CONNECTED' || (liveState === null && !liveErr))) {
+    return report('✅', 'READY', 'ok',
+      'WhatsApp is connected and all tools (read, search, send, media) are operational.');
+  }
+
+  // ── We think we are READY, but the live socket disagrees: silent drop ──
+  if (state === 'READY') {
+    if (liveState === 'UNPAIRED' || liveState === 'UNPAIRED_IDLE') {
+      return report('❌', `READY→${liveState}`, 'action needed',
+        'This device was unlinked from the phone — the session is no longer valid.',
+        ['Call logout to clear the dead session.',
+         'Then call get_qr and have the user scan the new QR code.',
+         'Poll status until it returns READY.']);
+    }
+    if (liveState === 'CONFLICT') {
+      return report('⚠️', 'READY→CONFLICT', 'action needed',
+        'The session was taken over by WhatsApp Web open elsewhere (another browser/device).',
+        ['Ask the user to close WhatsApp Web in the other browser, OR',
+         'Call logout and re-scan the QR to reclaim the session here.']);
+    }
+    if (liveState === 'TIMEOUT') {
+      return report('⚠️', 'READY→TIMEOUT', 'transient',
+        'The connection timed out; the client may reconnect on its own.',
+        ['Wait ~15 s and call status again.',
+         'If it stays TIMEOUT, call logout and re-scan the QR.']);
+    }
+    if (liveState === 'DEPRECATED_VERSION') {
+      return report('❌', 'READY→DEPRECATED_VERSION', 'needs maintenance',
+        'WhatsApp rejected the WhatsApp Web version used by whatsapp-web.js.',
+        ['This requires a dependency update (whatsapp-web.js) by the developer — the agent cannot fix it. Inform the user.']);
+    }
+    // getState() failed, or returned some other non-CONNECTED value.
+    return report('⚠️', `READY→${liveErr ? 'UNREACHABLE' : (liveState || 'UNKNOWN')}`, 'uncertain',
+      'We believe we are connected but the live socket did not confirm it (the headless browser may have hiccuped or crashed).',
+      ['Wait a few seconds and call status again.',
+       'If it does not recover, call logout and re-scan the QR.']);
+  }
+
+  // ── Other lifecycle states ──
+  switch (state) {
+    case 'INITIALIZING':
+      return report('⏳', 'INITIALIZING', 'wait',
+        'The client is starting up (launching the browser and/or restoring the saved session).',
+        ['Wait ~15-30 s, then call status again.']);
+    case 'AUTHENTICATED':
+      return report('⏳', 'AUTHENTICATED', 'wait',
+        'The QR was scanned and the session is being established — almost there.',
+        ['Wait a few seconds, then call status again (it should turn READY).']);
+    case 'QR_READY':
+      return report('⚠️', 'QR_READY', 'action needed',
+        'Not logged in yet — WhatsApp needs the user to link this device with a QR code.',
+        ['Call get_qr to obtain the QR code.',
+         'Ask the user to scan it: WhatsApp → Settings → Linked Devices → Link a Device.',
+         'Poll status until it returns READY.']);
+    case 'DISCONNECTED':
+    default:
+      return report('❌', state, 'action needed',
+        'The WhatsApp session is disconnected (lost connection, auth failure, or expired session).',
+        ['Call logout to clear any stale session.',
+         'Then call get_qr and have the user scan the new QR code.',
+         'Poll status until it returns READY.']);
+  }
+}
+
+async function toolLogout() {
+  const prev = client;
+
+  // Reset shared state up front so a concurrent call (or the old client's
+  // late events) can't act on a half-torn-down instance.
+  client    = null;
+  lastQrStr = null;
+  state     = 'INITIALIZING';
+
+  if (prev) {
+    // Detach listeners so the old client's late 'disconnected'/'qr' events
+    // don't clobber the freshly re-initialized client's state.
+    try { prev.removeAllListeners(); } catch (_) {}
+
+    // Try a clean logout (tells WhatsApp to unlink this device). It runs JS in
+    // the browser page, so when the session has already expired the page is
+    // dead and this throws — exactly the case we must tolerate. Fall back to
+    // destroy() to at least close the browser and release the profile locks.
+    try {
+      await prev.logout();
+    } catch (e) {
+      log(`logout(): clean logout failed (session likely expired): ${e.message}`);
+      try { await prev.destroy(); } catch (e2) {
+        log(`logout(): destroy after failed logout also failed: ${e2.message}`);
+      }
+    }
+  }
+
+  // Force-remove the on-disk session cache — the stale token that previously
+  // had to be deleted by hand before a new login could succeed.
+  try {
+    await fs.promises.rm(SESSION_DIR, {
+      recursive: true, force: true, maxRetries: 5, retryDelay: 200,
+    });
+  } catch (e) {
+    log(`logout(): failed to clear session cache: ${e.message}`);
+    return `Error: logged out but could not clear the session cache at ${SESSION_DIR}: ${e.message}. ` +
+           `Delete that directory manually, then retry.`;
+  }
+
+  // Drop any stale QR artifacts so get_qr won't return an old code.
+  cleanupQrFiles();
+
+  // Re-initialize from scratch — a fresh QR is generated within a few seconds.
+  initClient();
+
+  return 'Logged out: session cache cleared and client re-initialized (no restart needed). ' +
+         'Wait a few seconds, then call get_qr to scan a new QR code and log in again.';
 }
 
 async function toolGetQr() {
@@ -247,11 +417,11 @@ async function toolListChats(args) {
 
 async function toolGetMessages(args) {
   const err = requireReady(); if (err) return err;
-  const chatId = args.chat_id;
-  if (!chatId) return 'Error: Missing required parameter chat_id.';
+  const resolved = await resolveChatId(args);
+  if (resolved.error) return resolved.error;
   const limit  = Math.min(args.limit  || 20,  100);
   const offset = Math.max(args.offset ||  0,    0);
-  const chat   = await client.getChatById(chatId);
+  const chat   = await client.getChatById(resolved.id);
 
   // fetchMessages always returns the most recent N messages (oldest→newest).
   // To support paging, we fetch limit+offset and discard the newest `offset`
@@ -272,20 +442,77 @@ async function toolGetMessages(args) {
   for (const msg of page) {
     const ts     = formatTimestamp(msg.timestamp);
     const author = msg.fromMe ? 'Me' : (msg.author || msg.from || '?');
-    const body   = (msg.body || '(media/no text)').slice(0, 400);
-    lines.push(`[${ts}] ${author}: ${body}`);
+    // For media, surface the type and the message id so the agent can fetch it
+    // via download_media; text-only lines stay uncluttered.
+    const tag    = msg.hasMedia ? ` [${msg.type}, download id="${msg.id._serialized}"]` : '';
+    const body   = (msg.body || (msg.hasMedia ? '(no caption)' : '(no text)')).slice(0, 400);
+    lines.push(`[${ts}] ${author}${tag}: ${body}`);
   }
   return lines.join('\n');
 }
 
 async function toolSendMessage(args) {
   const err = requireReady(); if (err) return err;
-  const { chat_id, message } = args;
-  if (!chat_id)  return 'Error: Missing required parameter chat_id.';
-  if (!message)  return 'Error: Missing required parameter message.';
-  const chat = await client.getChatById(chat_id);
+  const { message } = args;
+  if (!message) return 'Error: Missing required parameter message.';
+  const resolved = await resolveChatId(args);
+  if (resolved.error) return resolved.error;
+  const chat = await client.getChatById(resolved.id);
   await chat.sendMessage(message);
   return `✅ Message sent to "${chat.name}"`;
+}
+
+async function toolSendMedia(args) {
+  const err = requireReady(); if (err) return err;
+  const { source } = args;
+  if (!source) return 'Error: Missing required parameter source (a local file path or an http(s) URL).';
+  const resolved = await resolveChatId(args);
+  if (resolved.error) return resolved.error;
+
+  const { MessageMedia } = require('whatsapp-web.js');
+  let media;
+  try {
+    if (/^https?:\/\//i.test(source)) {
+      media = await MessageMedia.fromUrl(source, { unsafeMime: true });
+    } else {
+      // Resolve relative paths against the project root so the agent can pass
+      // e.g. "data/foo.png" without knowing the server's CWD.
+      const abs = path.isAbsolute(source) ? source : path.join(PROJECT_ROOT, source);
+      if (!fs.existsSync(abs)) return `Error: file not found: ${abs}`;
+      media = MessageMedia.fromFilePath(abs);
+    }
+  } catch (e) {
+    return `Error: could not load media from "${source}": ${e.message}`;
+  }
+
+  const chat = await client.getChatById(resolved.id);
+  await chat.sendMessage(media, {
+    caption: args.caption || undefined,
+    sendMediaAsDocument: !!args.as_document,
+  });
+  return `✅ Media sent to "${chat.name}"${args.caption ? ` with caption: ${args.caption}` : ''}`;
+}
+
+async function toolDownloadMedia(args) {
+  const err = requireReady(); if (err) return err;
+  const { message_id } = args;
+  if (!message_id) return 'Error: Missing required parameter message_id (from the "download id" field in get_messages).';
+
+  const msg = await client.getMessageById(message_id);
+  if (!msg) return `Error: no message found with id "${message_id}".`;
+  if (!msg.hasMedia) return 'Error: that message has no downloadable media.';
+
+  const media = await msg.downloadMedia();
+  if (!media || !media.data) return 'Error: media could not be downloaded (it may have expired or been deleted).';
+
+  if (!fs.existsSync(MEDIA_DIR)) fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  const ext      = extFromMime(media.mimetype);
+  const safeBase = (media.filename || `${Date.now()}_${msg.id.id}`).replace(/[^\w.\-]/g, '_');
+  const fileName = /\.[a-z0-9]+$/i.test(safeBase) ? safeBase : `${safeBase}.${ext}`;
+  const absPath  = path.join(MEDIA_DIR, fileName);
+  fs.writeFileSync(absPath, Buffer.from(media.data, 'base64'));
+
+  return `✅ Media downloaded (${media.mimetype}).\n• Local file: ${absPath}\n• URL: /data/whatsapp_media/${fileName}`;
 }
 
 async function toolSearchMessages(args) {
@@ -338,17 +565,22 @@ async function toolSearchContacts(args) {
 
 const TOOLS = [
   {
-    name: 'whatsapp_status',
-    description: 'Get the current WhatsApp connection status. Returns INITIALIZING, QR_READY (scan needed), AUTHENTICATED, READY, or DISCONNECTED.',
+    name: 'status',
+    description: 'Get the current WhatsApp connection status as a plain-language report: the state, what it means, and — when not operational — step-by-step instructions to fix it. Cross-checks the live socket so a silently dropped session is detected even when bookkeeping still says READY. Call this first whenever another WhatsApp tool fails.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
-    name: 'whatsapp_get_qr',
-    description: 'Get the QR code ASCII art for WhatsApp authentication. Only relevant when status is QR_READY. Show the output verbatim so the user can scan it with the WhatsApp app on their phone.',
+    name: 'get_qr',
+    description: 'Get the WhatsApp authentication QR code. Only relevant when status is QR_READY. Returns a local file path / URL (PNG or HTML page) to open and scan, with ASCII art as a fallback. The user scans it via WhatsApp → Linked Devices → Link a Device.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
-    name: 'whatsapp_list_chats',
+    name: 'logout',
+    description: 'Log out of WhatsApp: ends the current session, clears the cached credentials on disk, and re-initializes the client so a fresh QR code is generated immediately — no server restart needed. Use this when the session has expired/become stuck (status DISCONNECTED) or to link a different phone. After calling, wait a few seconds and use get_qr to scan the new code.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'list_chats',
     description: 'List recent WhatsApp chats (individual contacts and groups) with name, ID, and unread count. Use the returned ID in other tools.',
     inputSchema: {
       type: 'object',
@@ -361,9 +593,10 @@ const TOOLS = [
     },
   },
   {
-    name: 'whatsapp_get_messages',
-    description: 'Get messages from a specific WhatsApp chat or group by chat ID. ' +
-      'Use whatsapp_list_chats first to get the chat_id. ' +
+    name: 'get_messages',
+    description: 'Get messages from a WhatsApp chat or group. Identify the chat with EITHER chat_id ' +
+      '(from list_chats) OR a plain phone number for an individual contact. ' +
+      'Media messages are tagged with their type and a "download id" — pass that to download_media. ' +
       'Supports pagination: use offset to skip the most recent messages and read older history. ' +
       'Example: limit=20 offset=0 → last 20; limit=20 offset=20 → previous 20; limit=20 offset=40 → older 20.',
     inputSchema: {
@@ -372,6 +605,10 @@ const TOOLS = [
         chat_id: {
           type: 'string',
           description: 'The chat ID (e.g. "39xxxxxxxxxx@c.us" for a contact, "xxxxxxxxxx-xxxxxxxxxx@g.us" for a group).',
+        },
+        number: {
+          type: 'string',
+          description: 'Alternative to chat_id for an individual contact: a phone number with country code (e.g. "393331234567" or "+39 333 123 4567"). Ignored if chat_id is given. Does not work for groups.',
         },
         limit: {
           type: 'integer',
@@ -383,29 +620,81 @@ const TOOLS = [
             'Increment by `limit` to page through older history.',
         },
       },
-      required: ['chat_id'],
     },
   },
   {
-    name: 'whatsapp_send_message',
-    description: 'Send a WhatsApp text message to a chat or group.',
+    name: 'send_message',
+    description: 'Send a WhatsApp text message. Identify the recipient with EITHER chat_id (from ' +
+      'list_chats) OR a plain phone number for an individual contact — no lookup needed first.',
     inputSchema: {
       type: 'object',
       properties: {
         chat_id: {
           type: 'string',
-          description: 'The chat ID to send to (from whatsapp_list_chats).',
+          description: 'The chat ID to send to (from list_chats). Use for groups.',
+        },
+        number: {
+          type: 'string',
+          description: 'Alternative to chat_id for an individual contact: a phone number with country code (e.g. "393331234567" or "+39 333 123 4567"). Ignored if chat_id is given.',
         },
         message: {
           type: 'string',
           description: 'The text message to send.',
         },
       },
-      required: ['chat_id', 'message'],
+      required: ['message'],
     },
   },
   {
-    name: 'whatsapp_search_messages',
+    name: 'send_media',
+    description: 'Send an image, video, audio, or document to a WhatsApp chat or group. Identify the ' +
+      'recipient with EITHER chat_id OR a phone number (individual contact). The media comes from a local ' +
+      'file path or an http(s) URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chat_id: {
+          type: 'string',
+          description: 'The chat ID to send to. Use for groups.',
+        },
+        number: {
+          type: 'string',
+          description: 'Alternative to chat_id for an individual contact: a phone number with country code. Ignored if chat_id is given.',
+        },
+        source: {
+          type: 'string',
+          description: 'The media to send: a local file path (absolute, or relative to the project root) or an http(s) URL.',
+        },
+        caption: {
+          type: 'string',
+          description: 'Optional text caption to attach to the media.',
+        },
+        as_document: {
+          type: 'boolean',
+          description: 'Send as a file/document instead of an inline photo/video (default false).',
+        },
+      },
+      required: ['source'],
+    },
+  },
+  {
+    name: 'download_media',
+    description: 'Download the media (photo, video, audio, document) attached to a WhatsApp message and ' +
+      'save it locally. Pass the message_id shown as "download id" next to media messages in ' +
+      'get_messages. Returns the local file path and a /data/ URL.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        message_id: {
+          type: 'string',
+          description: 'The serialized message id from the "download id" field in get_messages.',
+        },
+      },
+      required: ['message_id'],
+    },
+  },
+  {
+    name: 'search_messages',
     description: 'Search messages across all WhatsApp chats by keyword.',
     inputSchema: {
       type: 'object',
@@ -423,10 +712,10 @@ const TOOLS = [
     },
   },
   {
-    name: 'whatsapp_search_contacts',
+    name: 'search_contacts',
     description: 'Search saved WhatsApp contacts by name. Use this to find the ID of a contact ' +
       'you want to message but who does not appear in recent chats. ' +
-      'For conversations already open, use whatsapp_list_chats instead.',
+      'For conversations already open, use list_chats instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -481,13 +770,16 @@ async function handleRequest(msg) {
     let text;
     try {
       switch (toolName) {
-        case 'whatsapp_status':          text = await toolStatus(toolArgs);         break;
-        case 'whatsapp_get_qr':          text = await toolGetQr(toolArgs);          break;
-        case 'whatsapp_list_chats':      text = await toolListChats(toolArgs);      break;
-        case 'whatsapp_get_messages':    text = await toolGetMessages(toolArgs);    break;
-        case 'whatsapp_send_message':    text = await toolSendMessage(toolArgs);    break;
-        case 'whatsapp_search_messages': text = await toolSearchMessages(toolArgs); break;
-        case 'whatsapp_search_contacts': text = await toolSearchContacts(toolArgs); break;
+        case 'status':          text = await toolStatus(toolArgs);         break;
+        case 'get_qr':          text = await toolGetQr(toolArgs);          break;
+        case 'logout':          text = await toolLogout(toolArgs);         break;
+        case 'list_chats':      text = await toolListChats(toolArgs);      break;
+        case 'get_messages':    text = await toolGetMessages(toolArgs);    break;
+        case 'send_message':    text = await toolSendMessage(toolArgs);    break;
+        case 'send_media':      text = await toolSendMedia(toolArgs);      break;
+        case 'download_media':  text = await toolDownloadMedia(toolArgs);  break;
+        case 'search_messages': text = await toolSearchMessages(toolArgs); break;
+        case 'search_contacts': text = await toolSearchContacts(toolArgs); break;
         default:
           return textResult(id, `Unknown tool: ${toolName}`, true);
       }

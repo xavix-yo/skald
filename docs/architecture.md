@@ -110,8 +110,8 @@ Plugin instances are constructed in `main.rs` as `Vec<Arc<dyn Plugin>>` and inje
 1. Client opens WebSocket: `GET /api/ws`
 2. `handle_socket()` gets or creates `ChatSessionHandler` via `ChatHub::session_handler("web")`
 3. Client sends `ClientMessage` JSON over WS
-4. `ChatHub::send_message("web", prompt, opts)` is called
-5. Handler spawns async task: `handler.handle_message(...)`
+4. `ChatHub::send_message("web", prompt, opts)` **enqueues** the message on the source's inbox and returns; it does not run the turn inline (see *Per-source inbox* in [session.md](session.md))
+5. The source's single consumer task drains the inbox, **coalescing** any messages that piled up during an in-flight turn into one prompt (joined by blank lines), and calls `handler.handle_message(...)`
 6. `handle_message` acquires `processing: Mutex<()>` (one at a time per session)
 7. `run_agent_turn` loop starts (up to `max_tool_rounds` rounds):
    - Build context: `build_openai_messages()` → system prompt + history + tool results

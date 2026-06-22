@@ -3,6 +3,7 @@ google-auth-oauthlib
 google-api-python-client
 googlemaps
 requests
+httpx
 
 # Kokoro ONNX TTS (plugin-tts-kokoro)
 kokoro-onnx

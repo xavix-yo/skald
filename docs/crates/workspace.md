@@ -237,7 +237,7 @@ Independent plugin crate for the private Telegram bot interface. Depends only on
 | `auth.rs` | `WhitelistFile`, pairing flow, `whitelist_watchdog` |
 | `attachments.rs` | `TelegramAttachment` — download and describe documents, photos, locations |
 | `helpers.rs` | `escape_html`, `label_to_html`, `send_long`, Markdown→HTML sanitizer |
-| `tools.rs` | `interface_tools` (async) — `send_attachment` always present; `send_voice_message` injected only when at least one TTS provider is active |
+| `tools.rs` | `interface_tools` (async) — `send_attachment` always present (sends images/videos inline by default, other types as a document, `as_document=true` to force a file); `send_voice_message` injected only when at least one TTS provider is active |
 
 `send_voice_message` calls `TtsProvider::get()` at message time, synthesises text via the highest-priority active provider, and sends the result with `bot.send_voice()`. The tool's description automatically includes the provider's `instructions()` field so the LLM knows how to format text for that specific voice engine.
 
