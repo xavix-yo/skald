@@ -13,6 +13,23 @@ pub fn is_file_write_tool(name: &str) -> bool {
     FILE_WRITE_TOOLS.contains(&name)
 }
 
+/// Tools that read file contents or directory listings from disk.
+/// Used by the approval gate to apply the `RunContext` read fast-path (auto-allow
+/// working dir / `docs/` / `skills/` / `allow_fs_reads`). All take a `path` argument.
+/// Update this list whenever a new file-read tool is added.
+pub const FILE_READ_TOOLS: &[&str] = &[
+    "read_file",
+    "grep_files",
+    "list_files",
+    "search_file",
+    "get_ast_outline",
+];
+
+/// Returns `true` if `name` is a file-read tool (i.e. it reads files/dirs from disk).
+pub fn is_file_read_tool(name: &str) -> bool {
+    FILE_READ_TOOLS.contains(&name)
+}
+
 pub mod tool_names;
 pub mod ast_outline;
 pub mod configure_plugin;

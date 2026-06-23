@@ -122,6 +122,12 @@ SQLite database. Do not commit the DB file.
 - `list_keys()` never returns values — safe to log or surface to the agent.
 - `get()` and `set()` return/accept the raw value — never log these.
 - Keys are case-sensitive uppercase by convention (`HUGGINGFACE_TOKEN`).
+- **The `secrets/` folder is distinct from this store.** Some credentials live on disk under
+  a cwd-relative `secrets/` directory (e.g. OAuth tokens written by MCP servers). The
+  filesystem read tools (`read_file`, `grep_files`, `list_files`, `search_file`,
+  `get_ast_outline`) are **denied** access to `secrets/` via seeded approval rules, so their
+  contents never reach the LLM context. See [approval/index.md](approval/index.md). External
+  MCP server processes read those token files directly and are unaffected.
 
 ---
 

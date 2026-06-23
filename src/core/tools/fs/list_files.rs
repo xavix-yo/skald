@@ -7,7 +7,9 @@ use crate::core::tools::{Tool, ToolDescriptionLength, truncate_label, MAX_LABEL_
 use super::resolve;
 
 /// Directories to skip unconditionally when walking.
-const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".cache"];
+/// `secrets` is skipped so a recursive listing rooted at a parent (e.g. the auto-read
+/// working directory) never reveals the contents of the secrets store.
+const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".cache", "secrets"];
 
 pub struct ListFiles;
 

@@ -70,15 +70,28 @@ The **Default** group has a seeded `allow * priority=9999` catch-all rule so sta
 | `mcp__*` | all MCP tools |
 | `*` | any tool |
 
-The `path_pattern` field uses the same glob logic, applied to the normalised path (`args["path"]` without leading `/` or `./`). If `path_pattern` is set but the tool has no `path` argument, the rule **does not** match.
+The `path_pattern` field uses the same logic, applied to the **normalised** path. Normalisation
+canonicalizes `args["path"]` (resolving `..` and symlinks via `tools::fs::canonicalize_for_policy`)
+and makes it relative to the process cwd, so `docs/../secrets/x` or a symlink into `secrets/`
+cannot evade a rule. If `path_pattern` is set but the tool has no `path` argument, the rule
+**does not** match.
 
 ### Evaluation Order
 
-1. **RunContext `allow_fs_writes` pre-check** (in `llm_loop.rs`, before `ApprovalManager`): if the tool is a file-write tool and the path matches any entry in `RunContext.allow_fs_writes`, the call is immediately allowed — `ApprovalManager.check()` is not called at all.
-2. Hardcoded exception: file-write targeting `memory/` → always `Allow`
-3. DB rules for the session's group, then `"default"` group as fallback — sorted by `priority ASC, id ASC` within each tier — first matching rule wins
-4. **Session bypass** (in-memory): if the result would be `Require` and an active bypass matches `session_id` + `category`, convert to `Allow`. `Deny` is never bypassed.
-5. No matching rule → `Require` (default-closed)
+`ApprovalManager.check()` runs **first**; the RunContext filesystem fast-path runs **after**
+and can only relax a `Require` to `Allow` (never overrides a `Deny`). Inside `check()`:
+
+1. Hardcoded exception: file-write targeting `memory/` → always `Allow`
+2. DB rules for the session's group, then `"default"` group as fallback — sorted by `priority ASC, id ASC` within each tier — first matching rule wins
+3. **Session bypass** (in-memory): if the result would be `Require` and an active bypass matches `session_id` + `category`, convert to `Allow`. `Deny` is never bypassed.
+4. No matching rule → `Require` (default-closed)
+
+Then, back in `llm_loop.rs`, if the result is still `Require`, the **RunContext filesystem
+fast-path** applies: a file-read tool whose path is read-allowed (`rc.is_read_allowed`:
+working dir / `docs/` / `skills/` / `allow_fs_reads` / `allow_fs_writes`) or a file-write tool
+whose path is write-allowed (`rc.is_write_allowed`) is upgraded to `Allow`. A `Deny` from
+step 2 is never reached here, so the `secrets/` deny holds even inside the auto-read working
+dir. Paths are canonicalized (`..`/symlinks resolved) before matching.
 
 ### Path Whitelist
 
@@ -86,7 +99,7 @@ There are two ways to pre-authorize writes to a directory:
 
 **Option A — RunContext `allow_fs_writes`** (session-scoped, no DB rule needed):
 
-Set `allow_fs_writes` on the session's `RunContext`. The pre-check fires in `llm_loop.rs` before `ApprovalManager`, so no approval event is emitted at all.
+Set `allow_fs_writes` on the session's `RunContext`. The fast-path fires in `llm_loop.rs` after `ApprovalManager` and upgrades a `Require` to `Allow`, so no approval event is emitted (a `Deny` rule still wins).
 
 ```json
 {
@@ -130,6 +143,20 @@ Default rules are inserted only when the `approval_rules` table is empty. They c
 ### Hardcoded Exception
 
 File-writes targeting `memory/` are always auto-approved, regardless of rules. This allows the LLM to manage its own memory autonomously.
+
+### Secrets Deny (seeded)
+
+`seed_secrets_deny_rules()` seeds `deny` rules (priority 5) for every read tool
+(`read_file`, `grep_files`, `list_files`, `search_file`, `get_ast_outline`) on the patterns
+`secrets` and `secrets/*`. Reading a secret would leak its value into the LLM context, chat
+history, the compactor's summaries and the WS stream — worse than a write — hence `deny`
+(non-bypassable) rather than `require`. Since `Deny` is evaluated before the RunContext
+read fast-path, `secrets/` stays unreadable even though it is inside the auto-read working
+dir. The recursive read tools also skip any `secrets` directory during traversal (`SKIP_DIRS`),
+so a search rooted higher up cannot leak secret values.
+
+> This protects the cwd-relative `secrets/` folder. Tokens read by external MCP server
+> processes are unaffected (they read their own files directly, not via these tools).
 
 ---
 
@@ -431,7 +458,8 @@ The endpoint returns `AllTools`:
 | `src/core/approval/mod.rs` | `ApprovalManager`, `GateResult`, `ApprovalRule`, `PendingApprovalInfo`, `CategoryBypass`, session bypass methods; `is_tool_visible` (sync); `check_tool_visibility` (async); `impl ApprovalApi` |
 | `src/core/clarification/mod.rs` | `ClarificationManager`, `PendingClarificationInfo` |
 | `src/core/inbox.rs` | `Inbox`: unified façade for pending approvals + clarifications (wraps ApprovalManager, ClarificationManager, ChatHub) |
-| `src/core/run_context/mod.rs` | `RunContext` domain object: fields `security_group`, `system_prompt`, `allow_fs_writes`, `working_directory` + applicative methods `tool_group_id()`, `extra_system_prompt()`, `effective_working_dir()`, `is_write_allowed()`. `RunContextManager`: CRUD for permission groups; `duplicate_group` (atomic); `check_tool_visibility`. |
+| `src/core/run_context/mod.rs` | `RunContext` domain object: fields `security_group`, `system_prompt`, `allow_fs_writes`, `allow_fs_reads`, `working_directory` + applicative methods `tool_group_id()`, `extra_system_prompt()`, `effective_working_dir()`, `is_write_allowed()`, `is_read_allowed()`. `RunContextManager`: CRUD for permission groups; `duplicate_group` (atomic); `check_tool_visibility`. |
+| `src/core/tools/fs/mod.rs` | `canonicalize_for_policy` / `path_under` — path canonicalization shared by the RunContext fast-paths and `approval::normalize_path` |
 | `src/core/db/approval_rules.rs` | SQLite queries: list, insert, update, delete |
 | `src/core/db/mod.rs` | `approval_rules` table creation |
 | `src/core/session/handler/config.rs` | Loads rules once with `list_for_group`, calls `approval.is_tool_visible` to filter `base_tool_defs` for the parent agent |

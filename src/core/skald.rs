@@ -233,6 +233,9 @@ impl Skald {
         if let Err(e) = approval.seed_data_path_rules().await {
             warn!(error = %e, "failed to seed data path allow rules (non-fatal)");
         }
+        if let Err(e) = approval.seed_secrets_deny_rules().await {
+            warn!(error = %e, "failed to seed secrets/ deny rules (non-fatal)");
+        }
         if let Err(e) = approval.seed_allow_all_default().await {
             warn!(error = %e, "failed to seed allow-all catch-all rule (non-fatal)");
         }

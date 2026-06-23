@@ -9,7 +9,8 @@ use crate::core::chat_event_bus::ToolCallEvent;
 use crate::core::chatbot::{ChatOptions, LlmTurn};
 use crate::core::db::{chat_history, chat_llm_tools};
 use crate::core::events::ServerEvent;
-use crate::core::tools::{is_file_write_tool, ToolDescriptionLength};
+use crate::core::tools::{is_file_read_tool, is_file_write_tool, ToolDescriptionLength};
+use crate::core::run_context::RunContext;
 
 use super::{ApprovalDecision, ChatSessionHandler, TurnOutcome};
 use super::interface_tools::AgentRunConfig;
@@ -213,29 +214,33 @@ impl ChatSessionHandler {
                         }
 
                         // ── Approval gate ──────────────────────────────────────────────
+                        // The approval engine decides first: an explicit Deny/Allow rule
+                        // always wins. The RunContext fast-path below then only relaxes a
+                        // `Require` to `Allow` for pre-authorized filesystem paths — it
+                        // never overrides a `Deny` (same semantics as session bypass), so
+                        // e.g. the `secrets/` deny rule holds even inside the auto-read WD.
                         let category = self.tools.category_of(&call.name);
                         let group_id = self.tool_group_id().await;
-                        let gate = if is_file_write_tool(&call.name) {
+                        let mut gate = self.approval.check(
+                            self.session_id, category,
+                            &config.agent_id, &self.source, &call.name, &effective_args,
+                            group_id.as_deref(),
+                        ).await;
+
+                        if matches!(gate, GateResult::Require) {
                             let path = effective_args["path"].as_str().unwrap_or("");
-                            let pre_allowed = self.run_context.read().await
-                                .as_ref()
-                                .map(|rc| rc.is_write_allowed(path))
-                                .unwrap_or(false);
-                            if pre_allowed { GateResult::Allow }
-                            else {
-                                self.approval.check(
-                                    self.session_id, category,
-                                    &config.agent_id, &self.source, &call.name, &effective_args,
-                                    group_id.as_deref(),
-                                ).await
-                            }
-                        } else {
-                            self.approval.check(
-                                self.session_id, category,
-                                &config.agent_id, &self.source, &call.name, &effective_args,
-                                group_id.as_deref(),
-                            ).await
-                        };
+                            let guard = self.run_context.read().await;
+                            let dflt  = RunContext::default();
+                            let rc    = guard.as_ref().unwrap_or(&dflt);
+                            let pre_allowed = if is_file_read_tool(&call.name) {
+                                rc.is_read_allowed(path)
+                            } else if is_file_write_tool(&call.name) {
+                                rc.is_write_allowed(path)
+                            } else {
+                                false
+                            };
+                            if pre_allowed { gate = GateResult::Allow; }
+                        }
                         match gate {
                             GateResult::Deny => {
                                 let msg = "Tool call denied by approval policy.".to_string();

@@ -8,6 +8,7 @@ use tracing::info;
 
 pub use crate::core::db::tool_permission_groups::ToolPermissionGroup;
 use crate::core::approval::{ApprovalManager, RuleAction};
+use crate::core::tools::fs::{canonicalize_for_policy, path_under};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RunContext {
@@ -16,6 +17,10 @@ pub struct RunContext {
     pub system_prompt:     Vec<String>,
     #[serde(default)]
     pub allow_fs_writes:   Vec<String>,
+    /// Extra directories/files granted read-only access (beyond the working directory,
+    /// `docs/`, `skills/`, and everything in `allow_fs_writes`, which is readable too).
+    #[serde(default)]
+    pub allow_fs_reads:    Vec<String>,
     /// Working directory for tool calls. None means Skald's own process cwd.
     #[serde(default)]
     pub working_directory: Option<String>,
@@ -59,25 +64,39 @@ impl RunContext {
     /// True if writing to `path` is pre-authorized by this RunContext.
     /// Entries in `allow_fs_writes` are resolved against `effective_working_dir`,
     /// so relative entries like `"data"` are treated as relative to the session WD.
-    /// Matching: exact file OR recursive directory prefix (no wildcards needed).
+    /// Paths are canonicalized first (resolving `..`/symlinks), then matched as
+    /// exact file OR recursive directory prefix.
     pub fn is_write_allowed(&self, path: &str) -> bool {
         if self.allow_fs_writes.is_empty() { return false; }
-        let wd  = self.effective_working_dir();
-        let abs = make_absolute(path, &wd);
+        let wd    = self.effective_working_dir();
+        let canon = canonicalize_for_policy(path, &wd);
         self.allow_fs_writes.iter().any(|entry| {
-            let e = make_absolute(entry, &wd);
-            abs == e || abs.starts_with(&format!("{}/", e.trim_end_matches('/')))
+            path_under(&canon, &canonicalize_for_policy(entry, &wd))
         })
     }
-}
 
-/// Resolves `path` to absolute using `base` if relative; absolute paths are returned as-is (without trailing slash).
-fn make_absolute(path: &str, base: &PathBuf) -> String {
-    let p = std::path::Path::new(path);
-    if p.is_absolute() {
-        path.trim_end_matches('/').to_string()
-    } else {
-        base.join(path.trim_end_matches('/')).to_string_lossy().into_owned()
+    /// True if reading `path` is pre-authorized by this RunContext.
+    /// Read access is granted (no approval prompt) for: the working directory itself,
+    /// its `docs/` and `skills/` subtrees (always-safe baseline), any `allow_fs_reads`
+    /// entry, and anything writable (write implies read). All paths are canonicalized
+    /// first so `..`/symlink escapes cannot widen the grant.
+    ///
+    /// Note: this only relaxes a `Require` decision to `Allow` — an explicit `Deny`
+    /// rule (e.g. on `secrets/`) still wins, because the approval engine is consulted
+    /// first and `Deny` is never overridden by this fast-path.
+    pub fn is_read_allowed(&self, path: &str) -> bool {
+        let wd    = self.effective_working_dir();
+        let canon = canonicalize_for_policy(path, &wd);
+
+        let mut roots: Vec<std::path::PathBuf> = vec![
+            canonicalize_for_policy(".",      &wd), // working directory itself
+            canonicalize_for_policy("docs",   &wd),
+            canonicalize_for_policy("skills", &wd),
+        ];
+        roots.extend(self.allow_fs_reads.iter().map(|e| canonicalize_for_policy(e, &wd)));
+        roots.extend(self.allow_fs_writes.iter().map(|e| canonicalize_for_policy(e, &wd)));
+
+        roots.iter().any(|root| path_under(&canon, root))
     }
 }
 
@@ -219,5 +238,139 @@ impl RunContextManager {
             .execute(self.db.as_ref())
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Creates a fresh, uniquely-named temp directory for an fs test.
+    fn unique_tmp() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir()
+            .join(format!("skald_rc_test_{}_{}", std::process::id(), nanos));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn rc_with_wd(wd: &PathBuf) -> RunContext {
+        RunContext {
+            working_directory: Some(wd.to_string_lossy().into_owned()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn read_allows_working_dir_docs_skills() {
+        let wd = unique_tmp();
+        for sub in ["docs", "skills", "sub", "secrets"] {
+            std::fs::create_dir_all(wd.join(sub)).unwrap();
+            std::fs::write(wd.join(sub).join("f.txt"), "x").unwrap();
+        }
+        std::fs::write(wd.join("root.txt"), "x").unwrap();
+
+        let rc = rc_with_wd(&wd);
+        assert!(rc.is_read_allowed("root.txt"));
+        assert!(rc.is_read_allowed("docs/f.txt"));
+        assert!(rc.is_read_allowed("skills/f.txt"));
+        assert!(rc.is_read_allowed("sub/f.txt"));
+        // secrets/ is under the WD, so the fast-path allows it — the `secrets/` *deny rule*
+        // (consulted before this fast-path in the gate) is what actually blocks it.
+        assert!(rc.is_read_allowed("secrets/f.txt"));
+
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    #[test]
+    fn read_denies_outside_working_dir() {
+        let wd      = unique_tmp();
+        let outside = unique_tmp(); // sibling temp dir, not under wd
+        std::fs::write(outside.join("f.txt"), "x").unwrap();
+
+        let rc = rc_with_wd(&wd);
+        assert!(!rc.is_read_allowed(outside.join("f.txt").to_str().unwrap()));
+
+        std::fs::remove_dir_all(&wd).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[test]
+    fn read_allows_write_paths_and_extra_reads() {
+        let wd       = unique_tmp();
+        let writable = unique_tmp();
+        let readable = unique_tmp();
+        std::fs::write(writable.join("w.txt"), "x").unwrap();
+        std::fs::write(readable.join("r.txt"), "x").unwrap();
+
+        let rc = RunContext {
+            working_directory: Some(wd.to_string_lossy().into_owned()),
+            allow_fs_writes:   vec![writable.to_string_lossy().into_owned()],
+            allow_fs_reads:    vec![readable.to_string_lossy().into_owned()],
+            ..Default::default()
+        };
+        // write implies read
+        assert!(rc.is_read_allowed(writable.join("w.txt").to_str().unwrap()));
+        assert!(rc.is_write_allowed(writable.join("w.txt").to_str().unwrap()));
+        // read-only grant: readable but not writable
+        assert!(rc.is_read_allowed(readable.join("r.txt").to_str().unwrap()));
+        assert!(!rc.is_write_allowed(readable.join("r.txt").to_str().unwrap()));
+
+        std::fs::remove_dir_all(&wd).ok();
+        std::fs::remove_dir_all(&writable).ok();
+        std::fs::remove_dir_all(&readable).ok();
+    }
+
+    #[test]
+    fn canonicalize_resolves_parent_traversal() {
+        let wd = unique_tmp();
+        std::fs::create_dir_all(wd.join("docs")).unwrap();
+        std::fs::create_dir_all(wd.join("secrets")).unwrap();
+        std::fs::write(wd.join("secrets").join("s.txt"), "x").unwrap();
+
+        assert_eq!(
+            canonicalize_for_policy("docs/../secrets/s.txt", &wd),
+            canonicalize_for_policy("secrets/s.txt", &wd),
+        );
+
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    #[test]
+    fn canonicalize_resolves_symlink_escape() {
+        let wd = unique_tmp();
+        std::fs::create_dir_all(wd.join("docs")).unwrap();
+        std::fs::create_dir_all(wd.join("secrets")).unwrap();
+        std::fs::write(wd.join("secrets").join("s.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(wd.join("secrets"), wd.join("docs").join("leak")).unwrap();
+
+        // A symlink docs/leak -> secrets must resolve to the real secrets path.
+        assert_eq!(
+            canonicalize_for_policy("docs/leak/s.txt", &wd),
+            canonicalize_for_policy("secrets/s.txt", &wd),
+        );
+
+        std::fs::remove_dir_all(&wd).ok();
+    }
+
+    #[test]
+    fn write_allow_not_bypassed_by_traversal() {
+        let wd = unique_tmp();
+        std::fs::create_dir_all(wd.join("data")).unwrap();
+        std::fs::create_dir_all(wd.join("secrets")).unwrap();
+
+        let rc = RunContext {
+            working_directory: Some(wd.to_string_lossy().into_owned()),
+            allow_fs_writes:   vec!["data".to_string()],
+            ..Default::default()
+        };
+        // Writing into data/ is allowed...
+        assert!(rc.is_write_allowed("data/new.txt"));
+        // ...but data/../secrets/x escapes the grant and must NOT be allowed.
+        assert!(!rc.is_write_allowed("data/../secrets/x.txt"));
+
+        std::fs::remove_dir_all(&wd).ok();
     }
 }

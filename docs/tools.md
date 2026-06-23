@@ -200,6 +200,25 @@ Labels are emitted in `ServerEvent::ToolStart` as `label_short` and `label_full`
 
 Paths starting with `memory/` bypass the approval gate for write tools.
 
+### Security-aware canonicalization
+
+`tools::fs::canonicalize_for_policy(path, base)` resolves a path to its canonical absolute
+form (resolving `..` and symlinks of the longest existing ancestor) for security
+prefix-matching. It is shared by the RunContext fast-paths (`is_write_allowed` /
+`is_read_allowed`) and `approval::normalize_path`, so traversal/symlink tricks like
+`docs/../secrets/x` cannot evade an allow grant or a deny rule. `path_under(child, base)`
+does the component-wise prefix test.
+
+### Read auto-allow & `secrets/` deny
+
+Read tools (`read_file`, `grep_files`, `list_files`, `search_file`, `get_ast_outline`) are
+auto-allowed without a prompt when the path is under the working dir, `docs/`, `skills/`,
+`allow_fs_reads`, or `allow_fs_writes` (the RunContext read fast-path). The `secrets/`
+directory is denied for these tools via seeded `deny` rules; the recursive ones
+(`grep_files`, `list_files`) additionally list `secrets` in their `SKIP_DIRS` so a search
+rooted higher up never descends into it. See [approval/index.md](approval/index.md) and
+[session/run-context.md](session/run-context.md).
+
 ---
 
 ## Adding a Tool

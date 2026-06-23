@@ -310,6 +310,48 @@ impl ApprovalManager {
         Ok(())
     }
 
+    /// Idempotent: seeds `deny` rules so the read tools cannot read the `secrets/`
+    /// directory. Reading a secret would leak its value into the LLM context, chat
+    /// history, the compactor's summaries and the WS stream — a read is effectively
+    /// worse than a write here, hence `deny` (not `require`). `Deny` is non-bypassable,
+    /// so this holds even under an active session bypass.
+    ///
+    /// Two patterns per tool: `secrets` (a tool rooted *at* the dir, e.g. recursive
+    /// `grep_files`/`list_files`) and `secrets/*` (a file inside it). This complements
+    /// the hardcoded `secrets` entry in the read tools' `SKIP_DIRS`, which prevents
+    /// recursive descent into `secrets/` when rooted higher up.
+    ///
+    /// Matches the cwd-relative `secrets/` (Skald's own). Skipped once present.
+    pub async fn seed_secrets_deny_rules(&self) -> Result<()> {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM approval_rules
+             WHERE path_pattern IN ('secrets', 'secrets/*') AND action = 'deny'",
+        )
+        .fetch_one(self.db.as_ref())
+        .await?;
+
+        if count > 0 {
+            return Ok(());
+        }
+
+        let read_tools = &["read_file", "grep_files", "list_files", "search_file", "get_ast_outline"];
+        for tool in read_tools {
+            for pattern in ["secrets", "secrets/*"] {
+                sqlx::query(
+                    "INSERT INTO approval_rules (tool_pattern, path_pattern, action, note, priority, group_id)
+                     VALUES (?, ?, 'deny', 'deny reading secrets/', 5, 'default')",
+                )
+                .bind(tool)
+                .bind(pattern)
+                .execute(self.db.as_ref())
+                .await?;
+            }
+        }
+
+        info!("approval_rules: seeded secrets/ deny rules for {} read tools", read_tools.len());
+        Ok(())
+    }
+
     // ── Guardian ──────────────────────────────────────────────────────────────
 
     /// Main gate check: returns what the guardian has decided for this tool call.
@@ -774,18 +816,19 @@ fn mcp_server_from_tool_name(name: &str) -> Option<String> {
 
 /// Normalises a file path to a project-relative form for rule matching.
 ///
-/// If the path is absolute and falls under the process working directory, it is
-/// made relative to that directory. Otherwise the leading `/` and `./` are
-/// stripped as a best-effort fallback.
+/// The path is canonicalized first (resolving `..` and symlinks via
+/// `canonicalize_for_policy`) so that `docs/../secrets/x` or a symlink into `secrets/`
+/// cannot evade a path-pattern rule. If the canonical path falls under the process
+/// working directory it is made relative to it; otherwise the leading `/` is stripped
+/// as a best-effort fallback.
 pub(crate) fn normalize_path(path: &str) -> String {
-    if path.starts_with('/') {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Ok(rel) = std::path::Path::new(path).strip_prefix(&cwd) {
-                return rel.to_string_lossy().into_owned();
-            }
-        }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let cwd = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    let canon = crate::core::tools::fs::canonicalize_for_policy(path, &cwd);
+    if let Ok(rel) = canon.strip_prefix(&cwd) {
+        return rel.to_string_lossy().into_owned();
     }
-    path.trim_start_matches('/').trim_start_matches("./").to_string()
+    canon.to_string_lossy().trim_start_matches('/').to_string()
 }
 
 /// Returns `true` when a file-write tool is targeting the `memory/` directory.
