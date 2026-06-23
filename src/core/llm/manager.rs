@@ -542,10 +542,17 @@ fn model_tier(
         (Some(_), None)          => false,
         (None, _)                => true,
     };
+    // Prefer exact strength match over over-qualified models so that e.g. an
+    // agent with strength=low picks the `low` model before `average`.
+    let exact_match = match (req_strength, model_strength) {
+        (Some(req), Some(avail)) => avail == req,
+        _                        => true,
+    };
     let scope_ok = req_scope.map_or(true, |sc| model_scope.iter().any(|x| x == sc));
-    match (strength_ok && scope_ok, strength_ok) {
-        (true, _)      => 0,
-        (false, true)  => 1,
-        _              => 2,
+    match (strength_ok && scope_ok, exact_match && scope_ok, strength_ok) {
+        (true, true, _)  => 0, // exact strength + scope ok
+        (true, false, _) => 1, // over-qualified but scope ok
+        (false, _, true) => 2, // strength ok, scope mismatch
+        _                => 3, // doesn't meet minimum bar
     }
 }
