@@ -109,11 +109,20 @@ persisted at session creation (via `ChatSessionManager::create_session`) so it's
 handler is built. Because the session is interactive, `execute_task` is auto-injected, giving the
 coordinator sub-agent delegation for free.
 
-**UI.** The desktop copilot shows browser-style tabs: `General` (the `web` source, always present)
-plus one tab per open project chat. The board's **Open Chat** button `POST`s the session endpoint,
-then dispatches a `project-chat-open` window event (`{source, label}`); the copilot adds/focuses the
-tab and calls `ChatSession._switchSource(source)` to swap the live WebSocket. Closing a project tab
-is UI-only — the session persists and can be reopened from the board. See [frontend.md](frontend.md).
+**UI (desktop).** The desktop copilot shows browser-style tabs: `General` (the `web` source, always
+present) plus one tab per open project chat. The board's **Open Chat** button `POST`s the session
+endpoint, then dispatches a `project-chat-open` window event (`{source, label}`); the copilot
+adds/focuses the tab and calls `ChatSession._switchSource(source)` to swap the live WebSocket.
+Closing a project tab is UI-only — the session persists and can be reopened from the board.
+
+**UI (mobile).** The mobile web app (`<mobile-app>`) has a **Projects** bottom-nav entry rendering
+`<projects-page>` (list from `GET /api/projects`). Tapping a project `POST`s the same session
+endpoint and emits a `project-open` event; the shell navigates to `#chat/project-{id}`, which its
+hash router turns into the `<chat-page>` `source` prop `project-{id}` (→ `_switchSource`) with the
+project name in the header. A back button returns to `#chat` (the main `mobile` session), and the
+hash survives refresh. It reuses the **same** `project-{id}` session as the desktop, so a project
+chat is continuous across desktop, mobile browser, and — since the native iOS shell renders this web
+app over the relay — remote. See [frontend.md](frontend.md).
 
 ---
 

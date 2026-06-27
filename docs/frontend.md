@@ -1,5 +1,17 @@
 # Frontend
 
+## HTTP Server
+
+Axum router assembled in `src/frontend/server.rs` (`WebServer::build_router_with_plugins`):
+
+- `/api/*` — the app's HTTP handlers (`State<Arc<Skald>>`), plus per-plugin routers nested under `/api/plugin/<id>/`.
+- `/data/*` — the on-disk `data/` directory (served via `tower_http::services::ServeDir`, so e.g. `/data/gmail_attachments/...` resolves to a file URL).
+- Static fallback — the `web.static_dir` directory (`ServeDir`), i.e. the SPA assets.
+
+**Compression.** A global `tower_http::compression::CompressionLayer` (gzip + brotli, enabled via the `compression-gzip` / `compression-br` features) wraps the whole router. Encoding is negotiated from the client's `Accept-Encoding` (no-op for clients that don't advertise one and for already-compressed media). The main motivation is the **mobile relay path**: the native WebView's HTTP traffic is reverse-proxied byte-for-byte over a relay pipe (`http-local-proxy`), so shrinking text assets (JS/CSS/HTML) ~70-90% means far fewer bytes cross the slow link. Desktop browsers benefit the same way.
+
+**Caching.** Static responses (SPA assets + `/data/*`) carry `Cache-Control: no-cache` (applied via a `tower_http::set_header::SetResponseHeaderLayer` on the two `ServeDir`s). The browser may store the asset but **must revalidate before use** — so after a self-rewrite/restart the client never serves a stale asset (no heuristic caching), and revalidation yields cheap `304`s (`ETag`/`Last-Modified` from `ServeDir`). `/api/*` is deliberately left without the header (dynamic data, not cached). Note: because the mobile loopback proxy listens on an OS-assigned port, WKWebView's URLCache is keyed by a port that changes across app/tab restarts — so cross-session cache hits depend on that port being stable (tracked as a separate, app-side follow-up).
+
 ## WebSocket Endpoint
 
 `GET /api/ws?source=<string>`
@@ -154,7 +166,8 @@ Cancel message (abort current turn): `{"type":"cancel"}`
 |---|---|---|---|
 | `web/lib/chat-session.js` | `ChatSession` (base) | Shared WS logic, message state, all approval/LLM event handling. Subclasses override `_wsSource`, `_getInputContent`, `_clearInput`, `_scrollToBottom`, `_onMessagePushed`. Effective source is `_source` (`_activeSource ?? _wsSource`); `_switchSource(source)` tears down the WS, reloads history, and reconnects to switch sessions live |
 | `web/components/copilot.js` | `<app-copilot>` | Desktop copilot panel (`_wsSource='web'`); resize, composer input with model pill and auto-resize textarea. Browser-style tabs (`General` + project chats); listens for the `project-chat-open` window event to add/focus a project tab |
-| `web/components/shared/chat-page.js` | `<chat-page>` | Mobile chat page (`_wsSource='mobile'`); extends `ChatSession` with mobile-specific layout |
+| `web/components/shared/chat-page.js` | `<chat-page>` | Mobile chat page; extends `ChatSession` with mobile-specific layout. The `source` prop (default `mobile`) re-points the chat: when it changes the component calls `_switchSource` to bind to a project's `project-{id}` session; it also honours `source` on the first connect (cold deep link from the native shell); inside a project the header shows the project `label` + a back button that emits `project-exit` |
+| `web/components/shared/projects-page.js` | `<projects-page>` | Mobile project list. Loads `GET /api/projects`; tapping a project `POST`s `/api/projects/{id}/session` and emits a `project-open` event (`{source, label}`) so `<mobile-app>` re-points the chat |
 | `web/components/copilot-render.js` | (helpers) | Renders messages, tool call blocks, diffs — shared by copilot and chat-page. Tool labels and diff headers render the call's `path` (when present) as a clickable link via `renderLabel`/`renderPath` → `openFile(path)` |
 | `web/components/sidebar.js` | `<app-sidebar>` | Navigation sidebar; polls `/api/inbox` every 10 s for badge count |
 | `web/components/topbar.js` | `<app-topbar>` | Top navigation bar |
@@ -192,6 +205,41 @@ Hash persistence: `window.location.hash` is set to `#approval/{group_id}` when n
 Approval cards have a yellow left border; clarification cards have a blue left border. Clarification cards show suggested-answer chips (click pre-populates the input) and a free-text input — submit with Enter or the Send button.
 
 Approval cards have Approve / Reject buttons and a timed bypass menu (15 min / 1 hour / Session) scoped to the tool's category or MCP server. The bypass scope auto-detects from the pending approval's metadata: `tool_category` for category-scoped, `mcp_server` for MCP server-scoped, otherwise `all`. The REST API also supports `bypass_secs` and `bypass_scope` fields in the resolve body.
+
+---
+
+## Mobile App & Native Shell
+
+The mobile UI (`web/mobile.html` → `<mobile-app>`) is the same SPA the desktop uses, laid out for touch. It is also what the **native iOS shell** renders in a WKWebView over the relay (see [relay/pipe.md](relay/pipe.md)).
+
+### Hash routing
+
+`<mobile-app>` drives its active section from the URL hash — the same model as the desktop sidebar (`web/components/sidebar.js`), so the URL is always the source of truth. `_readHash()` / `_applyHash()` react to `hashchange` and `popstate`; `_nav(section)` sets `location.hash`. This gives deep links, working back/refresh, and — for the native shell — a single observable signal for menu sync.
+
+| Hash | Section | Notes |
+|---|---|---|
+| `#inbox` | Inbox | Pending approvals + clarifications |
+| `#projects` | Projects | Project list |
+| `#chat` | Chat | Main mobile session (source `mobile`) |
+| `#chat/project-<id>` | Chat | Bound to a project's session (source `project-<id>`). The header label resolves from `/api/projects` (cached in `<mobile-app>`), so a cold deep link still shows the name. Back/refresh keep the user inside the project |
+| `#notifications`, `#settings` | (coming soon) | Placeholder |
+
+`<chat-page>` (`web/components/shared/chat-page.js`) honours its `source` prop on the **first** connect (via `_activeSource`), so a cold `#chat/project-<id>` deep link connects straight to that session instead of opening the `mobile` session and switching a tick later.
+
+### Native shell mode (`?native=true`)
+
+When loaded with `?native=true`, `<mobile-app>` sets a `data-native` attribute and **hides its HTML bottom nav** — the native tab bar is the chrome. `web/css/mobile.css` drops the web-side safe-area insets under `mobile-app[data-native]` (the native chrome owns the status-bar + home-indicator insets). Everything else is identical to the mobile-browser path.
+
+### Native ↔ Web contract
+
+The native tab bar and the web router stay in sync over one mechanism each direction:
+
+| Direction | Mechanism | Payload / call |
+|---|---|---|
+| Native → Web | set the hash | `webView.evaluateJavaScript("location.hash='#projects'")` — the web `hashchange` handler switches section. A project deep link works too (`#chat/project-<id>`). Same code path the browser uses. |
+| Web → Native | `WKScriptMessageHandler` named **`skaldNav`** | on every section change `<mobile-app>` calls `window.webkit.messageHandlers.skaldNav.postMessage({ section, project })`, where `project` is `null` or `'project-<id>'`. The shell updates its tab highlight. No-op when the handler is absent (mobile browser). |
+
+The `skaldNav` bridge is the reliable sync: relying solely on observing the WKWebView URL is fragile, because same-document (hash-only) navigations don't reliably fire `WKNavigationDelegate` callbacks across iOS versions.
 
 ---
 
@@ -421,10 +469,7 @@ force a rebuild); shell-escape inputs (`\input{|"command"}`) are not tracked.
 
 ### Mobile
 
-Not wired on mobile (`<mobile-app>` has no hash router and the chat is one
-tab among many, so the original motivation for the page refactor — keeping
-the chat usable — does not apply). `openFile` is a no-op on mobile for now;
-a mobile-specific surface can be added later if needed.
+`<mobile-app>` now has a hash router (see [Mobile App & Native Shell](#mobile-app--native-shell)), but the **File Viewer page itself is not rendered** there — only `inbox`, `projects`, `chat`, and the placeholder sections. `openFile` is therefore still a no-op on mobile; a mobile file-viewer surface can be added later by routing `#file_viewer?path=...` like the desktop.
 
 ### Roadmap
 

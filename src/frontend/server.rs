@@ -4,7 +4,12 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::Router;
 use tokio::{net::TcpListener, task::JoinHandle};
+use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
+
+use axum::http::{HeaderValue, header};
+use tower::ServiceBuilder;
 
 use crate::frontend::api;
 use crate::core::skald::Skald;
@@ -75,8 +80,23 @@ impl WebServer {
         }
         // Serve the data/ directory under /data/ (accessible via URL).
         let data_dir = Path::new(static_dir).parent().unwrap_or(Path::new(".")).join("data");
-        router = router.nest_service("/data", ServeDir::new(&data_dir));
-        router.fallback_service(ServeDir::new(static_dir))
+        // Static responses (SPA assets + /data) get `Cache-Control: no-cache`:
+        // the browser may store them but MUST revalidate before use, so after a
+        // self-rewrite/restart the client never serves a stale asset (no heuristic
+        // caching). Revalidation yields cheap 304s (the body is already on disk).
+        // `/api` is deliberately left without this header (dynamic, not cached).
+        let static_assets = || ServiceBuilder::new().layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ));
+        router = router.nest_service("/data", static_assets().service(ServeDir::new(&data_dir)));
+        router = router.fallback_service(static_assets().service(ServeDir::new(static_dir)));
+        // Negotiated gzip/brotli compression (Accept-Encoding). Matters most for
+        // the mobile WebView, whose HTTP traffic is reverse-proxied byte-for-byte
+        // over a relay pipe — text assets (JS/CSS/HTML) shrink ~70-90%, so far
+        // fewer bytes cross the slow link. No-op for already-compressed media and
+        // for clients that don't advertise an encoding.
+        router.layer(CompressionLayer::new())
     }
 }
 

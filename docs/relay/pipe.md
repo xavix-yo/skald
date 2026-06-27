@@ -154,6 +154,13 @@ variant — so adding the pipe is purely additive and the `plugin-mobile-connect
 unchanged. The relay client owns the pipe control plane end-to-end (it intercepts only the `pipe_*`
 signaling kinds; every other payload stays pass-through).
 
+### 6.1 Agent-side consumers (by `stream_type`)
+- **`http-local-proxy`** — `plugin-mobile-connector` (`src/proxy.rs`) accepts these pipes and
+  reverse-proxies each, byte-for-byte, to the local web server at `127.0.0.1:<web_port>`, letting a
+  native WebView render the Skald web UI over the relay (no NAT hole / Tailscale). Destination is
+  pinned (not client-chosen); access is already gated by §3.1 (agent or authorized client). See
+  [../plugins/mobile-connector.md](../plugins/mobile-connector.md#http-reverse-proxy-http-local-proxy).
+
 ## 7. client↔client (deferred)
 The data plane is **already** client↔client-capable: the relay authenticates by namespace membership +
 cross-dest, not by agent-vs-client. Two things are missing above it, both additive:

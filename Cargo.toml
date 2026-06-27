@@ -33,7 +33,8 @@ whisper-local = ["dep:plugin-transcribe-whisper-local"]
 axum = { version = "0.8", features = ["ws", "multipart"] }
 tokio = { version = "1.52.3", features = ["full"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-tower-http = { version = "0.6.11", features = ["fs"] }
+tower-http = { version = "0.7.0", features = ["fs", "compression-gzip", "compression-br", "set-header"] }
+tower = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 anyhow = "1"

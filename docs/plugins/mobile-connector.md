@@ -67,6 +67,7 @@ Consequences of the split:
 | `payloads.rs` | E2E JSON payload schemas (`inbox_update`, `notification`, client responses incl. `inbox_request`). Zlib-compressible per v2 framing.md |
 | `app.rs` | `RelayApp`: Inbox dispatch (`broadcast_inbox`/`apply_client_payload`), authorization policy, the `events()` consumer loop |
 | `notifier.rs` | `DelayedNotifier`: debounces phone pushes (`notify_delay_secs`) so resolving on the computer suppresses the push. See [Delayed push](#delayed-push) |
+| `proxy.rs` | Accepts relay **pipes** of `stream_type = "http-local-proxy"` and reverse-proxies each to `127.0.0.1:<web_port>`. See [HTTP reverse proxy](#http-reverse-proxy-http-local-proxy) |
 | `router.rs` | The QR-code HTTP endpoint (`/pairingqrcode`), resolves the current `RelayApp` → `client.lookup_pairing` |
 | `agent.rs` | `RelayAgent` control trait (pairing, list, authorize, revoke) |
 | `tools.rs` | The three LLM tools, registered in the main crate's `ToolRegistry` |
@@ -178,6 +179,42 @@ device sends the complete list including it; revoking sends it without.
   if the agent is offline, the client gets `PeerOffline` immediately instead of
   waiting. Side-effect-free and idempotent (by `request_id`). See
   `data/ios-app/v2/relay-protocol.md` §3.1.
+
+---
+
+## HTTP reverse proxy (`http-local-proxy`)
+
+So a remote device can reach Skald's web UI **without** a VPN/Tailscale or an open
+port, the plugin reuses the relay **pipe** (relayed E2E byte-stream, see
+[relay/pipe.md](../relay/pipe.md)) as a reverse proxy to the local HTTP server.
+
+`proxy.rs` subscribes to `RelayClient::incoming_pipes()` and, for each invite with
+`stream_type == "http-local-proxy"`, accepts the pipe and splices it byte-for-byte
+to a **fresh** `TcpStream` to `127.0.0.1:<web_port>` (`PluginContext::web_port`).
+One spawned task per pipe; a `select!` alternates the two directions (the pipe API
+is half-duplex on `&mut self`, and `recv`/`read` are cancel-safe). Invites of other
+`stream_type`s are **ignored** (not rejected) since `incoming_pipes` is a broadcast
+shared with possible future consumers.
+
+The native app side (later) opens one pipe per outbound connection and points a
+WebView at it; because the tunnel is a transparent TCP splice, HTTP/1.1 keep-alive,
+parallel connections, and the chat WebSocket upgrade all work unchanged.
+
+**Security.**
+
+- The destination is **pinned** to `127.0.0.1:<web_port>` — the client cannot pick
+  host/port, so this is not an open localhost proxy (no SSRF to other local services).
+- Access is gated by the relay's pipe auth (`pipe.md §3.1`): only the namespace
+  agent or an **authorized** client can establish a pipe.
+- It exposes the full local web UI remotely — that is the intent; pair/authorize
+  devices accordingly.
+
+**Relay tuning** (env, `pipe.md §3.3`): a browser opens several connections, so
+`RELAY_PIPE_MAX_PER_NS` (default 8) may need raising; an idle chat-WS pipe can be
+reaped at `RELAY_PIPE_IDLE_TIMEOUT_SECS` (120 s) — the frontend auto-reconnects.
+
+Teardown: `proxy_one` takes a child of the plugin cancel token, so plugin stop
+closes active tunnels; `stop_inner` also `shutdown()`s the relay client.
 
 ---
 

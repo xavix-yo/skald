@@ -18,6 +18,7 @@ mod agent;
 mod app;
 mod notifier;
 mod payloads;
+mod proxy;
 mod router;
 mod tools;
 
@@ -174,6 +175,19 @@ impl MobileConnectorPlugin {
                         }
                     }
                 }
+            }));
+        }
+
+        // HTTP reverse proxy: bridge `http-local-proxy` pipes to the local web
+        // server so the native app can render the web UI over the relay (no NAT
+        // hole / Tailscale). Pinned to 127.0.0.1:<web_port>; access gated by the
+        // relay's pipe auth (only authorized namespace members).
+        {
+            let client2 = Arc::clone(&client);
+            let c       = cancel.clone();
+            let port    = ctx.web_port;
+            handles.push(tokio::spawn(async move {
+                crate::proxy::run_proxy_loop(client2, port, c).await;
             }));
         }
 

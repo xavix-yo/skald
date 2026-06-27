@@ -5,22 +5,55 @@ import { renderMsg }     from '../copilot-render.js';
 export class ChatPage extends ChatSession {
   static properties = {
     visible: { type: Boolean },
+    // Target source. Defaults to the main mobile session; set to `project-{id}`
+    // to bind this chat to a project's coordinator session.
+    source:  { type: String },
+    // Human-readable label for the active source (e.g. the project name), shown
+    // in the header when inside a project.
+    label:   { type: String },
   };
 
   constructor() {
     super();
     this.visible = false;
+    this.source  = 'mobile';
+    this.label   = '';
+  }
+
+  connectedCallback() {
+    // Honour the initial `source` prop on the first connect so a cold deep-link
+    // (e.g. the native shell opening #chat/project-<id>) connects straight to it,
+    // instead of connecting to the 'mobile' default and switching a tick later
+    // (which would briefly open two WebSockets). Later `source` prop changes are
+    // still handled by `updated` below.
+    if (this.source && this.source !== this._wsSource) this._activeSource = this.source;
+    super.connectedCallback();
   }
 
   updated(changed) {
     if (changed.has('visible') && this.visible) {
       this._scrollToBottom();
     }
+    // The owner (mobile-app) re-points this chat by changing `source`. Switch the
+    // live connection — base `_switchSource` tears down the WS, reloads that
+    // source's history, and reconnects. The guard skips the initial no-op render.
+    if (changed.has('source') && this.source !== this._source) {
+      this._switchSource(this.source);
+    }
   }
 
   // ── Source identity ────────────────────────────────────────────────────────
 
+  // Static fallback used only before the first `source` prop is applied.
   get _wsSource() { return 'mobile'; }
+
+  get _inProject() {
+    return typeof this.source === 'string' && this.source.startsWith('project-');
+  }
+
+  _exitProject() {
+    this.dispatchEvent(new CustomEvent('project-exit', { bubbles: true, composed: true }));
+  }
 
   // ── DOM hooks ──────────────────────────────────────────────────────────────
 
@@ -79,7 +112,13 @@ export class ChatPage extends ChatSession {
 
         <div class="mobile-section-header">
           <span class="mobile-section-title">
-            <i class="bi bi-chat-dots-fill"></i> Chat
+            ${this._inProject ? html`
+              <button class="chat-page-back" title="Back to General"
+                      @click=${() => this._exitProject()}>
+                <i class="bi bi-chevron-left"></i>
+              </button>
+              <i class="bi bi-folder2-open"></i> ${this.label || 'Project'}
+            ` : html`<i class="bi bi-chat-dots-fill"></i> Chat`}
           </span>
           <div class="chat-page-header-actions">
             ${this._providers.length > 1 ? html`
