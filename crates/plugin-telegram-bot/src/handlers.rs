@@ -6,6 +6,7 @@ use tracing::{error, info};
 
 use core_api::chat_hub::{ModelCommandOutcome, SendMessageOptions};
 use core_api::location::GpsCoord;
+use core_api::message_meta::MessageMetadata;
 
 use super::TELEGRAM_FORMAT_CONTEXT;
 use super::TgShared;
@@ -213,7 +214,7 @@ pub(crate) async fn message_handler(
                 }
             }
 
-            handle_llm_message(bot, chat_id, text, shared).await;
+            handle_llm_message(bot, chat_id, text, None, shared).await;
         }
     }
 
@@ -356,10 +357,11 @@ async fn handle_set_model(bot: &Bot, chat_id: ChatId, args: &[String], shared: &
 // ── LLM dispatch ─────────────────────────────────────────────────────────────
 
 async fn handle_llm_message(
-    bot:     Bot,
-    chat_id: ChatId,
-    text:    String,
-    shared:  Arc<TgShared>,
+    bot:      Bot,
+    chat_id:  ChatId,
+    text:     String,
+    metadata: Option<MessageMetadata>,
+    shared:   Arc<TgShared>,
 ) {
     bot.send_chat_action(chat_id, ChatAction::Typing).await.ok();
 
@@ -372,6 +374,7 @@ async fn handle_llm_message(
         extra_system_context: Some(TELEGRAM_FORMAT_CONTEXT.to_string()),
         tail_reminder:        Some(super::TELEGRAM_FORMAT_REMINDER.to_string()),
         interface_tools:      super::tools::interface_tools(bot, chat_id, &*shared.tts).await,
+        metadata,
         ..Default::default()
     };
 
@@ -433,7 +436,7 @@ async fn handle_voice(
          The user sent a voice message. The following is the audio transcript:\n\n\
          {text}"
     );
-    handle_llm_message(bot.clone(), chat_id, message, Arc::clone(shared)).await;
+    handle_llm_message(bot.clone(), chat_id, message, None, Arc::clone(shared)).await;
 }
 
 // ── Edited message (live location updates) ────────────────────────────────────
@@ -465,8 +468,8 @@ async fn handle_attachment(
 
     bot.send_chat_action(chat_id, ChatAction::UploadDocument).await.ok();
 
-    let saved_path = match attachment.download_and_save(&bot, &shared.uploads_dir, chat_id.0).await {
-        Ok(p)  => p,
+    let saved = match attachment.download_and_save(&bot, &shared.uploads_dir, chat_id.0).await {
+        Ok(s)  => s,
         Err(e) => {
             error!(error = %e, "telegram: failed to save attachment");
             bot.send_message(chat_id, "⚠️ Could not save the attachment.").await.ok();
@@ -474,10 +477,24 @@ async fn handle_attachment(
         }
     };
 
-    if let Some(ref path) = saved_path {
-        info!(chat_id = chat_id.0, path = %path.display(), "telegram: attachment saved, forwarding to LLM");
+    match saved {
+        // Document / Photo: carry the file as structured metadata (rendered as a
+        // chip in the copilot UI; the LLM gets the shared [SYSTEM INFO] block).
+        // The caption, if any, becomes the user's text for this turn.
+        Some(att) => {
+            info!(chat_id = chat_id.0, path = %att.path, "telegram: attachment saved, forwarding to LLM");
+            let caption = match &attachment {
+                TelegramAttachment::Document { caption, .. } => caption.clone(),
+                TelegramAttachment::Photo    { caption, .. } => caption.clone(),
+                TelegramAttachment::Location { .. }          => None,
+            }.unwrap_or_default();
+            let metadata = MessageMetadata { attachments: vec![att] };
+            handle_llm_message(bot, chat_id, caption, Some(metadata), shared).await;
+        }
+        // Location (no file): keep the textual system-info block.
+        None => {
+            let message = attachment.system_info_message(None);
+            handle_llm_message(bot, chat_id, message, None, shared).await;
+        }
     }
-
-    let message = attachment.system_info_message(saved_path.as_deref());
-    handle_llm_message(bot, chat_id, message, shared).await;
 }

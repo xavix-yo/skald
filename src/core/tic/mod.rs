@@ -211,7 +211,7 @@ impl TicManager {
         let (tx, _rx) = mpsc::channel(32);
         let notify = crate::core::tools::notify::make_tool(Arc::clone(&self.hub), "TIC");
 
-        handler.handle_message(&prompt, None, None, None, None, vec![notify], std::collections::HashMap::new(), tx, true).await?;
+        handler.handle_message(&prompt, None, None, None, None, vec![notify], std::collections::HashMap::new(), tx, true, None).await?;
 
         info!(session_id, count = events.len(), "TicManager: tick complete");
         Ok(())

@@ -164,11 +164,13 @@ When the user sends a voice note, the plugin:
 
 The LLM has access to a `send_voice_message(text)` tool. When it calls it, the plugin:
 
-1. Passes the text to `SpeechPlugin::synthesize()`.
-2. Sends the resulting audio back to the user as a Telegram voice message.
-3. Falls back to text if synthesis fails.
+1. Passes the text to the active `TextToSpeech` synthesiser (`synthesize()`).
+2. **Transcodes the audio to Ogg/Opus** (`to_ogg_opus` in `tools.rs`) — the only format Telegram renders as a playable voice message. The synthesiser's `output_format()` decides the input: `opus`/`ogg` pass through untouched; raw `pcm` (e.g. Gemini TTS) is decoded as 24 kHz/mono/s16le; every other container (mp3, wav, …) is auto-detected. Conversion runs `ffmpeg` over stdin/stdout pipes (no temp files).
+3. Sends the resulting Ogg/Opus bytes back to the user as a Telegram voice message.
 
 The LLM is instructed to use voice only for short, conversational replies with no code or complex formatting. The TTS engine's formatting guide (SSML-like tags) is also injected into the system context so the LLM can control pacing and emphasis.
+
+> **Requires `ffmpeg`** on `PATH` for any non-Opus synthesiser. If it is missing, `send_voice_message` returns a clear error (`ffmpeg not available …`) and the LLM falls back to a text reply.
 
 ### Requirements
 
@@ -178,15 +180,23 @@ Both `plugins.speech.stt_model` and `plugins.speech.tts_model` must be set in `c
 
 ## File & Media Attachments
 
-The Telegram plugin handles incoming attachments by downloading them and injecting a `[TELEGRAM SYSTEM INFO]` message into the conversation history. The LLM sees the event in timeline order — it knows which file was most recently sent without any special indexing.
+The Telegram plugin downloads incoming attachments and forwards them to the conversation. The LLM sees them in timeline order — it knows which file was most recently sent without any special indexing.
 
-| Type | Saved to disk | Message content |
+| Type | Saved to disk | How it reaches the LLM |
 | --- | --- | --- |
-| Document (PDF, ZIP, …) | `uploads/telegram/<chat_id>/<filename>` | File name, MIME type, path |
-| Photo | `uploads/telegram/<chat_id>/<file_id>.jpg` | Path |
-| Location | — | Latitude, longitude, accuracy, Google Maps URL |
+| Document (PDF, ZIP, …) | `data/uploads/telegram/<chat_id>/<filename>` | Structured `metadata.attachments` (shared with web/mobile) |
+| Photo | `data/uploads/telegram/<chat_id>/<file_id>.jpg` | Structured `metadata.attachments` |
+| Location | — | `[TELEGRAM SYSTEM INFO]` text (latitude, longitude, accuracy, Google Maps URL) |
 
-Captions (text typed alongside a file or photo) are included in the info message when present.
+**Document and Photo are aligned with the web/mobile attachment model**: `download_and_save`
+returns a `core_api::message_meta::Attachment` (project-root-relative path so `/data/…` serves
+it), `handle_attachment` puts it in `SendMessageOptions.metadata`, and the message builder
+generates the shared `[SYSTEM INFO]` block on the fly. Viewing the `telegram` source from the
+copilot therefore shows these as **chips**, not raw text. See
+[frontend.md](../frontend.md#attachments) and [database.md](../database.md) (`chat_history.metadata`).
+
+**Location** has no file, so it keeps the legacy `[TELEGRAM SYSTEM INFO]` text path
+(`system_info_message`). Captions typed alongside a Document/Photo become the user turn's text.
 
 ### Live locations
 
@@ -203,8 +213,8 @@ The `uploads/` directory is gitignored.
 
 To add a new type (e.g. sticker, contact):
 
-1. Add a variant to `TelegramAttachment` in `src/core/plugin/telegram/attachments.rs`.
-2. Implement `download_and_save` (return `Ok(None)` if no file) and `system_info_message`.
+1. Add a variant to `TelegramAttachment` in `crates/plugin-telegram-bot/src/attachments.rs`.
+2. Implement `download_and_save`: return `Ok(Some(Attachment))` for a file-backed type (it flows into `metadata.attachments`) or `Ok(None)` for a file-less one (then add a `system_info_message` arm and handle it in the `None` branch of `handle_attachment`).
 3. Detect the message type in `classify_message` in `handlers.rs` and return `IncomingEvent::Attachment(...)`.
 
 ---

@@ -159,7 +159,13 @@ fn send_voice_tool(bot: Bot, chat_id: ChatId, synth: Arc<dyn TextToSpeech>) -> I
                     .await
                     .map_err(|e| anyhow::anyhow!("send_voice_message: TTS error: {e}"))?;
 
-                bot.send_voice(chat_id, InputFile::memory(audio))
+                // Telegram only renders Ogg/Opus as a playable voice message, so
+                // transcode whatever the synthesiser produced (mp3, wav, raw pcm…).
+                let audio = to_ogg_opus(audio, synth.output_format())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("send_voice_message: audio conversion failed: {e}"))?;
+
+                bot.send_voice(chat_id, InputFile::memory(audio).file_name("voice.ogg"))
                     .await
                     .map_err(|e| anyhow::anyhow!("send_voice_message: Telegram error: {e}"))?;
 
@@ -167,4 +173,55 @@ fn send_voice_tool(bot: Bot, chat_id: ChatId, synth: Arc<dyn TextToSpeech>) -> I
             })
         }),
     }
+}
+
+/// Transcode synthesised audio to Ogg/Opus — the only format Telegram renders as
+/// a playable voice message — using ffmpeg over stdin/stdout pipes (no temp files).
+///
+/// `format` is the synthesiser's [`TextToSpeech::output_format`]. Ogg/Opus input
+/// is passed through untouched. Raw `pcm` is headerless, so it is described to
+/// ffmpeg as the 24 kHz / mono / s16le stream OpenAI and Gemini TTS emit; every
+/// other (self-describing) container is auto-detected by ffmpeg.
+async fn to_ogg_opus(audio: Vec<u8>, format: &str) -> anyhow::Result<Vec<u8>> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+
+    // Already a Telegram-native container — nothing to do.
+    if matches!(format, "opus" | "ogg") {
+        return Ok(audio);
+    }
+
+    let mut cmd = tokio::process::Command::new("ffmpeg");
+    cmd.args(["-hide_banner", "-loglevel", "error"]);
+    if format == "pcm" {
+        cmd.args(["-f", "s16le", "-ar", "24000", "-ac", "1"]);
+    }
+    cmd.args(["-i", "pipe:0", "-c:a", "libopus", "-b:a", "32k", "-f", "ogg", "pipe:1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().map_err(|e| anyhow::anyhow!(
+        "ffmpeg not available (required to convert {format} audio to Telegram Ogg/Opus): {e}"
+    ))?;
+
+    // Feed stdin from a separate task so a full stdout pipe can't deadlock the write.
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    let feeder = tokio::spawn(async move {
+        let _ = stdin.write_all(&audio).await;
+        let _ = stdin.shutdown().await;
+    });
+
+    let out = child.wait_with_output().await
+        .map_err(|e| anyhow::anyhow!("ffmpeg execution failed: {e}"))?;
+    let _ = feeder.await;
+
+    if !out.status.success() {
+        anyhow::bail!(
+            "ffmpeg ({format} → Ogg/Opus) exited with {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim(),
+        );
+    }
+    Ok(out.stdout)
 }

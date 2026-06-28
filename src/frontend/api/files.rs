@@ -46,6 +46,11 @@ pub struct FileQuery {
     /// source. Other file types ignore this flag.
     #[serde(rename = "compile-latex", default)]
     pub compile_latex: bool,
+    /// When `true`, mark the response as a download (`Content-Disposition:
+    /// attachment`) so the browser saves the file instead of rendering it
+    /// inline. For a compiled `.tex` the attachment name is `<stem>.pdf`.
+    #[serde(rename = "force_download", default)]
+    pub force_download: bool,
 }
 
 /// Serve a file's raw bytes with a `Content-Type` derived from its extension.
@@ -69,7 +74,13 @@ pub async fn get_file(
 
     if q.compile_latex && is_latex(&q.path) {
         return match state.latex_compiler.compile(&abs).await {
-            Ok(pdf) => pdf_response(pdf.bytes),
+            Ok(pdf) => {
+                let mut response = pdf_response(pdf.bytes);
+                if q.force_download {
+                    set_attachment(&mut response, &pdf_download_name(&q.path));
+                }
+                response
+            }
             Err(err) => compile_error_response(err),
         };
     }
@@ -81,10 +92,44 @@ pub async fn get_file(
                 header::CONTENT_TYPE,
                 HeaderValue::from_static(content_type_for(&q.path)),
             );
+            if q.force_download {
+                set_attachment(&mut response, &basename(&q.path));
+            }
             response
         }
         Err(_) => (StatusCode::NOT_FOUND, format!("File not found: {}", q.path)).into_response(),
     }
+}
+
+/// Mark a response as a browser download via `Content-Disposition: attachment`.
+///
+/// HTTP header values must be visible ASCII, so the filename is sanitised
+/// (quotes, backslashes and non-ASCII bytes become `_`). This keeps it
+/// dependency-free; the worst case for an exotic filename is a couple of `_`.
+fn set_attachment(response: &mut Response, filename: &str) {
+    let safe: String = filename
+        .chars()
+        .map(|c| if c.is_ascii() && c != '"' && c != '\\' { c } else { '_' })
+        .collect();
+    if let Ok(value) = HeaderValue::from_str(&format!("attachment; filename=\"{safe}\"")) {
+        response.headers_mut().insert(header::CONTENT_DISPOSITION, value);
+    }
+}
+
+/// Final path component, e.g. `docs/report.tex` → `report.tex`.
+fn basename(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map_or_else(|| path.to_string(), |n| n.to_string_lossy().to_string())
+}
+
+/// Download name for a compiled LaTeX source: the stem with a `.pdf` extension,
+/// e.g. `docs/report.tex` → `report.pdf`.
+fn pdf_download_name(path: &str) -> String {
+    let stem = Path::new(path)
+        .file_stem()
+        .map_or_else(|| "output".to_string(), |s| s.to_string_lossy().to_string());
+    format!("{stem}.pdf")
 }
 
 /// Build a `200 OK` response carrying PDF bytes with the canonical

@@ -117,7 +117,8 @@ impl ApiProvider for OpenRouterProvider {
             let api_key = record.api_key.clone()
                 .with_context(|| format!("provider '{}': api_key required for openrouter", record.name))?;
             Ok(Arc::new(OpenAiTtsSynthesiser::new(
-                &model.name, base_url, api_key, &model.model_id, model.instructions.clone(),
+                &model.name, base_url, api_key, &model.model_id,
+                model.voice_id.clone(), model.instructions.clone(), model.response_format.clone(),
             )) as Arc<dyn crate::core::tts::TextToSpeech>)
         })())
     }

@@ -208,6 +208,7 @@ impl ChatHub {
             opts.system_substitutions,
             tx,
             opts.is_synthetic,
+            opts.metadata,
         ).await
     }
 

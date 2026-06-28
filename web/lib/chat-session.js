@@ -23,6 +23,9 @@ export class ChatSession extends LightElement {
     // Voice recording state (shared by every chat surface).
     _hasTranscribe:      { state: true },
     _recording:          { state: true },
+    // Pending attachments for the message being composed (shown as chips above
+    // the textarea; uploaded to disk on selection, sent with the next message).
+    _attachments:        { state: true },
   };
 
   // Live events whose arrival implies a turn is in flight (used to restore the
@@ -54,6 +57,9 @@ export class ChatSession extends LightElement {
     this._shortcutRecording = false;
     this._mediaRecorder     = null;
     this._audioChunks       = [];
+    // Each entry: { name, path, mimetype, filesize, uploading? }. While an upload
+    // is in flight the entry has `uploading: true` and no `path` yet.
+    this._attachments       = [];
   }
 
   async connectedCallback() {
@@ -337,7 +343,7 @@ export class ChatSession extends LightElement {
         // Other clients (different tabs, mobile) push it here.
         const last = this._messages[this._messages.length - 1];
         if (!(last?.kind === 'user' && last.content === msg.content)) {
-          this._push({ kind: 'user', content: msg.content });
+          this._push({ kind: 'user', content: msg.content, attachments: msg.attachments ?? [] });
         }
         break;
       }
@@ -411,22 +417,86 @@ export class ChatSession extends LightElement {
 
   async _send() {
     const content = this._getInputContent();
+    // Text is required; attachments are a complement, never sent on their own.
     if (!content || this._waiting) return;
+    // Don't send while an attachment is still streaming to disk, or its path
+    // would be missing from the message.
+    if (this._attachments.some(a => a.uploading)) return;
     this._clearInput();
 
     if (content === '/new' || content === '/clear') {
+      this._attachments = [];
       await this._startNewSession();
       return;
     }
 
-    this._push({ kind: 'user', content });
+    // Strip client-only fields; the server persists these as message metadata.
+    const attachments = this._attachments.map(({ name, path, mimetype, filesize }) =>
+      ({ name, path, mimetype, filesize }));
+    this._attachments = [];
+
+    this._push({ kind: 'user', content, attachments });
     this._waiting = true;
 
     if (this._ws?.readyState === WebSocket.OPEN) {
-      this._ws.send(JSON.stringify({ content }));
+      this._ws.send(JSON.stringify({ content, attachments }));
     } else {
       this._pushError('Not connected — reconnecting, please retry.');
       this._waiting = false;
+    }
+  }
+
+  // ── Attachments ────────────────────────────────────────────────────────────
+
+  /**
+   * Upload the given files to `data/uploads/{session}/` and add them as chips.
+   * Each file is streamed to disk server-side; while in flight its chip shows a
+   * spinner. Accepts a FileList or array of File.
+   */
+  async _addFiles(files) {
+    const list = Array.from(files || []).filter(Boolean);
+    if (list.length === 0) return;
+
+    // Optimistic placeholders so the chips appear immediately.
+    const pending = list.map(f => ({ name: f.name, filesize: f.size, mimetype: f.type, uploading: true }));
+    this._attachments = [...this._attachments, ...pending];
+
+    const form = new FormData();
+    for (const f of list) form.append('files', f, f.name);
+
+    try {
+      const res = await fetch(`/api/${this._source}/uploads`, { method: 'POST', body: form });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const saved = await res.json(); // [{ name, path, mimetype, filesize }]
+      // Replace the placeholders with the saved entries (preserve other chips).
+      this._attachments = this._attachments.filter(a => !pending.includes(a)).concat(saved);
+    } catch (e) {
+      console.error('upload failed:', e);
+      // Drop the failed placeholders and surface the error.
+      this._attachments = this._attachments.filter(a => !pending.includes(a));
+      this._pushError('Upload failed: ' + e.message);
+    }
+  }
+
+  _removeAttachment(i) {
+    this._attachments = this._attachments.filter((_, idx) => idx !== i);
+  }
+
+  /** Handler for a paste event: uploads any files on the clipboard. */
+  _onPaste(e) {
+    const files = e.clipboardData?.files;
+    if (files && files.length) {
+      e.preventDefault();
+      this._addFiles(files);
+    }
+  }
+
+  /** Handler for a drop event on the composer: uploads the dropped files. */
+  _onDrop(e) {
+    const files = e.dataTransfer?.files;
+    if (files && files.length) {
+      e.preventDefault();
+      this._addFiles(files);
     }
   }
 

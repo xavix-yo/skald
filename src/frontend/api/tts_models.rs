@@ -21,23 +21,25 @@ pub struct ModelPayload {
     pub provider_id:  i64,
     pub model_id:     String,
     pub voice_id:     Option<String>,
-    pub name:         String,
-    pub description:  Option<String>,
-    pub instructions: Option<String>,
-    pub priority:     Option<i32>,
+    pub name:            String,
+    pub description:     Option<String>,
+    pub instructions:    Option<String>,
+    pub response_format: Option<String>,
+    pub priority:        Option<i32>,
 }
 
 impl From<ModelPayload> for TtsModelRecord {
     fn from(p: ModelPayload) -> Self {
         TtsModelRecord {
-            id:           0,
-            provider_id:  p.provider_id,
-            model_id:     p.model_id.clone(),
-            voice_id:     p.voice_id.filter(|v| !v.is_empty()),
-            name:         if p.name.is_empty() { p.model_id } else { p.name },
-            description:  p.description,
-            instructions: p.instructions,
-            priority:     p.priority.unwrap_or(100),
+            id:              0,
+            provider_id:     p.provider_id,
+            model_id:        p.model_id.clone(),
+            voice_id:        p.voice_id.filter(|v| !v.is_empty()),
+            name:            if p.name.is_empty() { p.model_id } else { p.name },
+            description:     p.description,
+            instructions:    p.instructions,
+            response_format: p.response_format.filter(|v| !v.is_empty()),
+            priority:        p.priority.unwrap_or(100),
         }
     }
 }

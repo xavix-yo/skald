@@ -9,6 +9,13 @@
   --mobile-nav-active:   #0d6efd;
   --mobile-chat-bg:      #0d6efd;
 
+  /* Grouped-list surfaces: a faintly recessed list "well" with raised cards
+     on top, so a card reads as elevated even where it shares the page colour. */
+  --mobile-list-bg:      #f4f4f7;
+  --mobile-card-bg:      #ffffff;
+  --mobile-card-border:  #ececf1;
+  --mobile-card-shadow:  0 1px 2px rgba(16, 24, 40, 0.06), 0 6px 16px rgba(16, 24, 40, 0.05);
+
   /* Raised neutral surface for the chat composer + assistant bubbles, kept
      grey/neutral on purpose so the mobile chat doesn't inherit the desktop's
      indigo-tinted --msg-assistant-bg (which reads as purple in dark mode). */
@@ -25,6 +32,12 @@
   --mobile-chat-bg:      #0d6efd;
   --mobile-surface:      #2c2c2e;
   --mobile-surface-text: #e5e5ea;
+
+  /* Dark: recess the list below the page colour, raise cards above it. */
+  --mobile-list-bg:      #161618;
+  --mobile-card-bg:      #2c2c2e;
+  --mobile-card-border:  #3a3a3c;
+  --mobile-card-shadow:  0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.3);
 }
 
 body {
@@ -501,34 +514,53 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
   flex: 1;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 12px 16px;
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  background: var(--mobile-list-bg);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .mobile-projects .inbox-empty {
   flex: 1;
   height: auto;
   padding: 40px 20px;
+  background: var(--mobile-list-bg);
 }
 
 .project-card {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid var(--mobile-nav-border);
-  border-radius: 12px;
-  background: var(--mobile-nav-bg);
+  gap: 14px;
+  padding: 13px 14px;
+  border: 1px solid var(--mobile-card-border);
+  border-radius: 16px;
+  background: var(--mobile-card-bg);
+  box-shadow: var(--mobile-card-shadow);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: background 0.12s, border-color 0.12s;
+  transition: transform 0.12s ease, border-color 0.12s, box-shadow 0.12s;
 }
 
 .project-card:active {
-  background: rgba(13, 110, 253, 0.08);
+  transform: scale(0.985);
   border-color: var(--mobile-nav-active);
+  box-shadow: 0 0 0 1px var(--mobile-nav-active);
+}
+
+/* Rounded gradient "app icon" tile — the main visual anchor for each card. */
+.project-card-icon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent, #6366f1), var(--accent-hover, #4f46e5));
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
 }
 
 .project-card-main {
@@ -537,17 +569,19 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
 }
 
 .project-card-name {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.98rem;
-  font-weight: 600;
-  color: var(--bs-body-color, #212529);
+  font-size: 1rem;
+  font-weight: 650;
+  line-height: 1.25;
+  color: var(--mobile-surface-text, #1c1c1e);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .project-card-desc {
-  margin-top: 4px;
+  margin-top: 3px;
   font-size: 0.82rem;
+  line-height: 1.35;
   color: var(--mobile-nav-color);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -558,8 +592,9 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
 
 .project-card-chevron {
   color: var(--mobile-nav-color);
-  font-size: 1rem;
+  font-size: 0.95rem;
   flex-shrink: 0;
+  opacity: 0.6;
 }
 
 /* ── File viewer (mobile) ───────────────────────────── */
@@ -592,4 +627,15 @@ mobile-app[data-native] .chat-page-input-area { padding-bottom: 10px; }
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.92rem;
   font-weight: 500;
+  /* Ellipsise the start so a long filename keeps its tail (extension) visible;
+     `<bdi>` around the name preserves left-to-right order. */
+  direction: rtl;
+  text-align: left;
+}
+
+/* Let the title group shrink so the name ellipsises and the download button
+   stays pinned to the right of the header. */
+.mobile-file-viewer .mobile-section-title {
+  flex: 1 1 auto;
+  min-width: 0;
 }

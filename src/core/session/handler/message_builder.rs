@@ -200,7 +200,17 @@ impl MessageBuilder {
 
             match entry.role {
                 chat_history::Role::User | chat_history::Role::Agent => {
-                    out.push(json!({ "role": "user", "content": entry.content }));
+                    // Render attachments (if any) as a textual block appended to the
+                    // user turn, generated on the fly — never persisted as content.
+                    let content = match &entry.metadata {
+                        Some(meta) if !meta.attachments.is_empty() => format!(
+                            "{}{}",
+                            entry.content,
+                            core_api::message_meta::attachments_block(&meta.attachments),
+                        ),
+                        _ => entry.content.clone(),
+                    };
+                    out.push(json!({ "role": "user", "content": content }));
                 }
                 chat_history::Role::Assistant => {
                     let tool_calls = chat_llm_tools::for_message(pool, entry.id).await?;

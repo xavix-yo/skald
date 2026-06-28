@@ -18,6 +18,7 @@ use crate::core::compactor::ContextCompactor;
 use crate::core::config::DatetimeConfig;
 use crate::core::db::{chat_history, chat_sessions_stack};
 use crate::core::events::ServerEvent;
+use core_api::message_meta::MessageMetadata;
 use crate::core::llm::LlmManager;
 use crate::core::mcp::McpManager;
 use crate::core::image_generate::ImageGeneratorManager;
@@ -433,6 +434,9 @@ impl ChatSessionHandler {
         // True for system-generated messages injected as user turns
         // (TicManager ticks, notification briefings from ChatHub).
         is_synthetic:                 bool,
+        // Structured metadata persisted on the user turn (e.g. file attachments).
+        // The MessageBuilder derives the LLM-facing block; the UI renders chips.
+        metadata:                     Option<MessageMetadata>,
     ) -> anyhow::Result<()> {
         let _guard = self.processing.lock().await;
         // Fresh cancellation scope for this user message. Stored so `cancel()`
@@ -521,7 +525,7 @@ impl ChatSessionHandler {
         }
 
         let user_content    = content.to_string(); // save before TurnOutcome::Final shadows `content`
-        let user_message_id = chat_history::append(pool, stack.id, &chat_history::Role::User, content, is_synthetic, None).await?;
+        let user_message_id = chat_history::append_with_metadata(pool, stack.id, &chat_history::Role::User, content, is_synthetic, None, metadata.as_ref()).await?;
 
         // Resume any tool calls left pending from a previous interrupted session.
         // They are re-gated (rules may have changed) and executed before the LLM runs.

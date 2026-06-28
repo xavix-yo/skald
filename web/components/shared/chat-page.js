@@ -1,6 +1,6 @@
 import { html, nothing } from 'lit';
 import { ChatSession }   from '../../lib/chat-session.js';
-import { renderMsg }     from '../copilot-render.js';
+import { renderMsg, renderAttachmentChips } from '../copilot-render.js';
 
 export class ChatPage extends ChatSession {
   static properties = {
@@ -138,16 +138,32 @@ export class ChatPage extends ChatSession {
         </div>
 
         <div class="chat-page-input-area">
-          <div class="chat-page-composer">
+          <div class="chat-page-composer"
+               @dragover=${(e) => e.preventDefault()}
+               @drop=${(e) => this._onDrop(e)}>
+            ${renderAttachmentChips(this, this._attachments, { removable: true })}
+            <input
+              type="file"
+              multiple
+              class="chat-page-file-input"
+              style="display:none"
+              @change=${(e) => { this._addFiles(e.target.files); e.target.value = ''; }}
+            />
             <textarea
               class="chat-page-textarea"
               rows="1"
               placeholder="Type a message…"
               @input=${(e) => this._autoResize(e.target)}
+              @paste=${(e) => this._onPaste(e)}
               ?disabled=${this._waiting}
             ></textarea>
             <div class="chat-page-toolbar">
               <div class="chat-page-toolbar-left">
+                <button
+                  class="btn btn-sm btn-outline-secondary chat-page-attach-btn"
+                  title="Attach files"
+                  @click=${() => this.querySelector('.chat-page-file-input')?.click()}
+                ><i class="bi bi-paperclip"></i></button>
                 ${this._providers.length > 1 ? html`
                   <select
                     class="chat-page-model-pill"

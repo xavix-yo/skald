@@ -17,6 +17,8 @@ pub struct TtsModelInfo {
     pub name:          String,
     pub description:   Option<String>,
     pub instructions:  Option<String>,
+    /// Requested audio `response_format` (`None` ⇒ provider default `mp3`).
+    pub response_format: Option<String>,
     pub priority:      i32,
     /// `true` for plugin-registered (ephemeral) providers — not editable via the UI.
     pub from_plugin:   bool,

@@ -46,8 +46,11 @@ export class MobileFileViewerPage extends FileViewerBase {
             <button class="chat-page-back" title="Back" @click=${() => this._back()}>
               <i class="bi bi-arrow-left"></i>
             </button>
-            <span class="fv-mobile-name" title=${this.path ?? ''}>${this._basename()}</span>
+            <span class="fv-mobile-name" title=${this.path ?? ''}><bdi>${this._basename()}</bdi></span>
           </span>
+          <button class="chat-page-back" title="Download" @click=${() => this._download()}>
+            <i class="bi bi-download"></i>
+          </button>
         </div>
         <div class="fv-body">${this._renderBody()}</div>
       </div>

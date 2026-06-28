@@ -1,5 +1,7 @@
 use sqlx::SqlitePool;
 
+use core_api::message_meta::MessageMetadata;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Role {
     User,
@@ -45,9 +47,40 @@ pub struct ChatMessage {
     /// Cost of the turn in USD, when the provider reports it (OpenRouter).
     /// Null for providers that don't bill per-request.
     pub cost:              Option<f64>,
+    /// Generic structured metadata (JSON column): file attachments today,
+    /// extensible later. `None` when the row has no metadata.
+    pub metadata:          Option<MessageMetadata>,
     pub created_at:        Option<String>,
 }
 
+/// Raw row tuple for the shared `SELECT` projection. sqlx 0.9 requires SQL to be
+/// `&'static str`, so the column list is repeated literally in each query below;
+/// keep it in sync with this tuple and [`row_to_message`].
+type Row = (
+    i64, String, String, String, Option<i64>, Option<i64>, bool,
+    Option<String>, Option<f64>, Option<String>, Option<String>,
+);
+
+/// Maps a [`Row`] into a [`ChatMessage`]. Metadata that fails to parse is treated
+/// as absent (defensive: a malformed blob must not break history loading).
+fn row_to_message(r: Row) -> anyhow::Result<ChatMessage> {
+    let (id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, metadata, created_at) = r;
+    Ok(ChatMessage {
+        id,
+        role: Role::from_str(&role)?,
+        content,
+        status,
+        input_tokens,
+        output_tokens,
+        is_synthetic,
+        reasoning_content,
+        cost,
+        metadata: metadata.and_then(|s| serde_json::from_str(&s).ok()),
+        created_at,
+    })
+}
+
+/// Appends a message with no structured metadata (the common case).
 pub async fn append(
     pool:              &SqlitePool,
     session_stack_id:  i64,
@@ -56,15 +89,34 @@ pub async fn append(
     is_synthetic:      bool,
     reasoning_content: Option<&str>,
 ) -> anyhow::Result<i64> {
+    append_with_metadata(pool, session_stack_id, role, content, is_synthetic, reasoning_content, None).await
+}
+
+/// Like [`append`] but persists optional structured [`MessageMetadata`] (e.g. file
+/// attachments) as a JSON blob. Empty metadata is stored as `NULL`.
+pub async fn append_with_metadata(
+    pool:              &SqlitePool,
+    session_stack_id:  i64,
+    role:              &Role,
+    content:           &str,
+    is_synthetic:      bool,
+    reasoning_content: Option<&str>,
+    metadata:          Option<&MessageMetadata>,
+) -> anyhow::Result<i64> {
+    let metadata_json = metadata
+        .filter(|m| !m.is_empty())
+        .map(serde_json::to_string)
+        .transpose()?;
     let id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO chat_history (session_stack_id, role, content, is_synthetic, reasoning_content) \
-         VALUES (?, ?, ?, ?, ?) RETURNING id",
+        "INSERT INTO chat_history (session_stack_id, role, content, is_synthetic, reasoning_content, metadata) \
+         VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
     )
     .bind(session_stack_id)
     .bind(role.as_str())
     .bind(content)
     .bind(is_synthetic as i64)
     .bind(reasoning_content)
+    .bind(metadata_json)
     .fetch_one(pool)
     .await?;
     Ok(id)
@@ -107,8 +159,8 @@ pub async fn for_stack(
     pool:             &SqlitePool,
     session_stack_id: i64,
 ) -> anyhow::Result<Vec<ChatMessage>> {
-    let rows = sqlx::query_as::<_, (i64, String, String, String, Option<i64>, Option<i64>, bool, Option<String>, Option<f64>, Option<String>)>(
-        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, metadata, created_at
          FROM   chat_history
          WHERE  session_stack_id = ? AND status = 'ok'
          ORDER  BY id ASC",
@@ -117,11 +169,7 @@ pub async fn for_stack(
     .fetch_all(pool)
     .await?;
 
-    rows.into_iter()
-        .map(|(id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at)| {
-            Ok(ChatMessage { id, role: Role::from_str(&role)?, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at })
-        })
-        .collect()
+    rows.into_iter().map(row_to_message).collect()
 }
 
 /// All messages for a stack frame including failed ones, ordered chronologically.
@@ -130,8 +178,8 @@ pub async fn for_stack_all(
     pool:             &SqlitePool,
     session_stack_id: i64,
 ) -> anyhow::Result<Vec<ChatMessage>> {
-    let rows = sqlx::query_as::<_, (i64, String, String, String, Option<i64>, Option<i64>, bool, Option<String>, Option<f64>, Option<String>)>(
-        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, metadata, created_at
          FROM   chat_history
          WHERE  session_stack_id = ?
          ORDER  BY id ASC",
@@ -140,11 +188,7 @@ pub async fn for_stack_all(
     .fetch_all(pool)
     .await?;
 
-    rows.into_iter()
-        .map(|(id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at)| {
-            Ok(ChatMessage { id, role: Role::from_str(&role)?, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at })
-        })
-        .collect()
+    rows.into_iter().map(row_to_message).collect()
 }
 
 pub async fn set_model_db_id(pool: &SqlitePool, id: i64, model_db_id: i64) -> anyhow::Result<()> {
@@ -164,8 +208,8 @@ pub async fn for_stack_since(
     session_stack_id: i64,
     after_id:         i64,
 ) -> anyhow::Result<Vec<ChatMessage>> {
-    let rows = sqlx::query_as::<_, (i64, String, String, String, Option<i64>, Option<i64>, bool, Option<String>, Option<f64>, Option<String>)>(
-        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, metadata, created_at
          FROM   chat_history
          WHERE  session_stack_id = ? AND status = 'ok' AND id > ?
          ORDER  BY id ASC",
@@ -175,11 +219,7 @@ pub async fn for_stack_since(
     .fetch_all(pool)
     .await?;
 
-    rows.into_iter()
-        .map(|(id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at)| {
-            Ok(ChatMessage { id, role: Role::from_str(&role)?, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at })
-        })
-        .collect()
+    rows.into_iter().map(row_to_message).collect()
 }
 
 /// Returns the most recent ok message for a stack frame, or `None` if empty.
@@ -188,8 +228,8 @@ pub async fn last_message_for_stack(
     pool:             &SqlitePool,
     session_stack_id: i64,
 ) -> anyhow::Result<Option<ChatMessage>> {
-    let row = sqlx::query_as::<_, (i64, String, String, String, Option<i64>, Option<i64>, bool, Option<String>, Option<f64>, Option<String>)>(
-        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at
+    let row = sqlx::query_as::<_, Row>(
+        "SELECT id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, metadata, created_at
          FROM   chat_history
          WHERE  session_stack_id = ? AND status = 'ok'
          ORDER  BY id DESC
@@ -199,9 +239,7 @@ pub async fn last_message_for_stack(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row.map(|(id, role, content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at)| {
-        ChatMessage { id, role: Role::from_str(&role).unwrap_or(Role::User), content, status, input_tokens, output_tokens, is_synthetic, reasoning_content, cost, created_at }
-    }))
+    row.map(row_to_message).transpose()
 }
 
 /// Total cost (USD) of a whole session: all messages across every stack frame

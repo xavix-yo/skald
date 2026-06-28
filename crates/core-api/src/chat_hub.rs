@@ -5,6 +5,7 @@ use tokio::sync::broadcast;
 
 use crate::events::GlobalEvent;
 use crate::interface_tool::InterfaceTool;
+use crate::message_meta::MessageMetadata;
 
 // ── SendMessageOptions ────────────────────────────────────────────────────────
 
@@ -31,6 +32,9 @@ pub struct SendMessageOptions {
     pub interface_tools: Vec<InterfaceTool>,
     /// True for system-generated messages injected as user turns (notification briefings).
     pub is_synthetic: bool,
+    /// Opaque structured metadata persisted on the user turn (e.g. file attachments).
+    /// ChatHub forwards it verbatim; the MessageBuilder/UI derive their own views.
+    pub metadata: Option<MessageMetadata>,
 }
 
 // ── ChatHubApi ────────────────────────────────────────────────────────────────

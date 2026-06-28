@@ -64,6 +64,7 @@ Represents one agent call frame. Root frames have `depth=0`; sub-agent frames in
 | `is_synthetic` | INTEGER | NOT NULL DEFAULT `0` — `1` when the message was system-generated |
 | `reasoning_content` | TEXT | nullable — chain-of-thought from reasoning models |
 | `cost` | REAL | nullable — turn cost in USD, when the provider reports it (OpenRouter `usage.cost`) |
+| `metadata` | TEXT | nullable — generic JSON metadata bag (added v17); currently `{ "attachments": [...] }` |
 | `created_at` | TEXT | NOT NULL |
 
 - `role = 'agent'` is a sub-agent prompt message; sent as `user` to the LLM but hidden in the UI
@@ -72,6 +73,7 @@ Represents one agent call frame. Root frames have `depth=0`; sub-agent frames in
 - `is_synthetic = 1` marks messages injected by the system (ChatHub notification assistant messages with tool-call injection, or legacy synthetic user turns). They are included in the LLM context but excluded from the UI history (not shown on page reload). Currently used for `role = 'assistant'` rows that carry the synthetic `read_notification` tool call and reasoning trace.
 - `reasoning_content` is populated only for `role = 'assistant'` rows from providers that return chain-of-thought (currently DeepSeek thinking mode); echoed back in the assistant message on subsequent turns
 - `cost` is set on `role = 'assistant'` rows only when the provider returns a per-request price (OpenRouter exposes it under `usage.cost`); `null` for providers that don't bill per-call. Extracted via the `ChatbotClient::extract_cost` trait method (see [llm-clients.md](llm-clients.md))
+- `metadata` is a generic JSON bag (type `MessageMetadata` in `core-api`), set on `role = 'user'` rows that carry file attachments. The raw `[SYSTEM INFO]` block the LLM sees is **never** stored here — it is generated on the fly from `metadata.attachments` by the message builder, while the UI renders the same list as chips. `content` always stays the clean typed text. See [frontend.md](frontend.md) (attachments) and [session.md](session.md).
 
 Index: `idx_history_stack ON chat_history(session_stack_id)`
 
@@ -235,6 +237,7 @@ Managed via `SecretsStore` (`src/core/secrets.rs`). See [secrets.md](secrets.md)
 | `name` | TEXT | NOT NULL UNIQUE (display name, also used as the synthesiser `id()`) |
 | `description` | TEXT | nullable; human-readable description shown in UI |
 | `instructions` | TEXT | nullable; default voice style / tone / speed (overridable per call) |
+| `response_format` | TEXT | nullable; audio format `mp3`/`opus`/`aac`/`flac`/`wav`/`pcm` sent to the provider — NULL ⇒ `mp3` (added in schema v18) |
 | `priority` | INTEGER | NOT NULL DEFAULT 100 (lower = tried first by `TtsManager`) |
 | `removed_at` | TEXT | nullable; soft-delete |
 | `created_at` | TEXT | NOT NULL DEFAULT `datetime('now')` |
@@ -479,18 +482,32 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
         // INSERT OR REPLACE schema_version = 16
     }
 
+    // v17 — generic per-message metadata column (file attachments today).
+    if version < 17 {
+        sqlx::query("ALTER TABLE chat_history ADD COLUMN metadata TEXT").execute(pool).await?;
+        // bump schema_version to '17'
+    }
+
+    // v18 — per-model TTS response_format (mp3/opus/aac/flac/wav/pcm; NULL ⇒ mp3).
+    if version < 18 {
+        sqlx::query("ALTER TABLE tts_models ADD COLUMN response_format TEXT").execute(pool).await?;
+        // bump schema_version to '18'
+    }
+
     // Future migrations go here:
-    // if version < 17 { sqlx::query("ALTER TABLE …").execute(pool).await.ok(); /* bump to 17 */ }
+    // if version < 19 { sqlx::query("ALTER TABLE …").execute(pool).await.ok(); /* bump to 19 */ }
 
     Ok(())
 }
 ```
 
+The v17/v18 blocks are added in `migrate_tables` (not in `create_tables`): migrations also run on fresh DBs (the local `version` stays `0`), so adding the column only in the migration avoids a duplicate-column error on first boot.
+
 ### Adding a new migration
 
-Append an `if version < 17 { … }` block (then 18, …) below the baseline stamp. Use `.ok()` on each `ALTER TABLE` to stay idempotent, then bump `schema_version`. **Renaming columns, changing types, or dropping columns is not supported** by a plain `ALTER` — those need a single-transaction table rebuild (as the old v15/v16 did for `chat_llm_tools`).
+Append an `if version < 19 { … }` block (then 20, …) below the baseline stamp. Use `.ok()` on each `ALTER TABLE` to stay idempotent, then bump `schema_version`. **Renaming columns, changing types, or dropping columns is not supported** by a plain `ALTER` — those need a single-transaction table rebuild (as the old v15/v16 did for `chat_llm_tools`).
 
-> The original per-version history (1–16: `voice_id`, cache-token columns, `scheduled_jobs` columns, the `run_context_id` → `run_context` rename, the `run_contexts` flatten/drop, agent-id reassignments, `chat_history.cost`, the `chat_llm_tools` CHECK widening, …) is preserved in git history. It is no longer reachable code: a fresh DB is created at the final shape, and the only existing DBs are already at v16.
+> The original per-version history (1–16: `voice_id`, cache-token columns, `scheduled_jobs` columns, the `run_context_id` → `run_context` rename, the `run_contexts` flatten/drop, agent-id reassignments, `chat_history.cost`, the `chat_llm_tools` CHECK widening, …) is preserved in git history. It is no longer reachable code: a fresh DB is created at the baseline (v16) shape, then v17 adds `chat_history.metadata` and v18 adds `tts_models.response_format`.
 
 ---
 

@@ -117,11 +117,25 @@ Calls `POST {base_url}/audio/speech` with a JSON body:
 |-------|-------|
 | `model` | Provider model ID (e.g. `tts-1`, `tts-1-hd`, `gpt-4o-mini-tts`) |
 | `input` | Text to synthesise |
-| `voice` | `"alloy"` (default — overridable via `instructions`) |
-| `response_format` | `"mp3"` |
+| `voice` | From `tts_models.voice_id`; `NULL` ⇒ `"alloy"` |
+| `response_format` | From `tts_models.response_format`; `NULL` ⇒ `"mp3"` |
 | `instructions` | Optional natural-language style/tone/speed override |
 
-Returns raw MP3 bytes.
+Returns raw audio bytes in the requested `response_format` (default `mp3`).
+
+### `voice`
+
+The `voice` field is taken from the per-model `tts_models.voice_id` column, falling back to `alloy` when unset. Voice names are **provider-specific**: OpenAI uses `alloy`/`echo`/`fable`/`onyx`/`nova`/`shimmer`; Gemini uses `Kore`/`Puck`/`Zephyr`/`Charon`/… An unknown voice name can make the provider error (OpenRouter→Gemini surfaces this as a generic `500`), so set `voice_id` to a value valid for the chosen model.
+
+### `response_format`
+
+The audio container/codec is taken from the per-model `tts_models.response_format` column (`mp3`, `opus`, `aac`, `flac`, `wav`, `pcm`). Leaving it empty falls back to `mp3`. Some models reject `mp3` and require a specific value — e.g. `google/gemini-*-tts-*` on OpenRouter returns `400 … only supports response_format="pcm"`. Set the column (UI dropdown in the model form) to the value the model demands.
+
+> **Note:** `pcm` is raw, headerless audio. Consumers that need a playable container handle the transcode themselves — the Telegram `send_voice_message` tool converts whatever `output_format` reports (mp3/wav/**pcm**/…) to Ogg/Opus via ffmpeg before sending. See [plugins/telegram.md](../plugins/telegram.md).
+
+### `output_format()`
+
+`TextToSpeech::output_format()` reports the container/codec of the bytes returned by `synthesize` (`mp3`, `opus`, `wav`, `pcm`, …; default `"mp3"`). `OpenAiTtsSynthesiser` returns its configured `response_format`. Consumers that need a specific container use this to decide whether and how to transcode — e.g. raw `pcm` is headerless and must be described to the decoder, so the hint is essential there.
 
 ### Supported providers
 
@@ -183,8 +197,9 @@ CREATE TABLE tts_models (
     model_id     TEXT    NOT NULL,  -- generation model (e.g. eleven_multilingual_v2, tts-1-hd)
     voice_id     TEXT,              -- speaker voice (required for ElevenLabs; NULL for OpenAI)
     name         TEXT    NOT NULL UNIQUE,
-    description  TEXT,                        -- human-readable, shown in UI
-    instructions TEXT,                        -- default voice style / tone / speed
+    description     TEXT,                     -- human-readable, shown in UI
+    instructions    TEXT,                     -- default voice style / tone / speed
+    response_format TEXT,                      -- audio format (mp3/opus/aac/flac/wav/pcm); NULL ⇒ mp3
     priority     INTEGER NOT NULL DEFAULT 100,
     removed_at   TEXT,
     created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -192,7 +207,7 @@ CREATE TABLE tts_models (
 )
 ```
 
-`voice_id` was added in **schema version 2** via `ALTER TABLE tts_models ADD COLUMN voice_id TEXT`. See [database.md](database.md#migration-pattern).
+`voice_id` was added in **schema version 2** via `ALTER TABLE tts_models ADD COLUMN voice_id TEXT`. `response_format` was added in **schema version 18** via `ALTER TABLE tts_models ADD COLUMN response_format TEXT`. See [database.md](database.md#migration-pattern).
 
 ---
 

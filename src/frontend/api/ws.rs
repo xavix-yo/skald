@@ -296,15 +296,24 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 // ── Regular LLM message ───────────────────────────────────────
                 let content = client_msg.content.clone();
 
+                // Attachments uploaded beforehand. Wrapped into MessageMetadata and
+                // persisted on the user turn; the [SYSTEM INFO] block the LLM sees is
+                // generated on the fly by the MessageBuilder (never stored as text).
+                let attachments = client_msg.attachments.clone();
+                let metadata = (!attachments.is_empty())
+                    .then(|| core_api::message_meta::MessageMetadata { attachments: attachments.clone() });
+
                 // Broadcast to all clients on the same source so they see the
-                // user message in real-time (other tabs, mobile, etc.).
+                // user message in real-time (other tabs, mobile, etc.). Carries the
+                // typed text + structured attachments — never the [SYSTEM INFO] block.
                 skald.chat_hub.emit(GlobalEvent {
                     source:     Some(source.clone()),
                     session_id: None,
-                    event:      ServerEvent::UserMessage { content: content.clone() },
+                    event:      ServerEvent::UserMessage { content: content.clone(), attachments },
                 });
 
                 let opts = SendMessageOptions {
+                    metadata,
                     // The web dropdown is now a view of backend state; the pinned
                     // client lives in ChatHub.selected_clients[source]. The web
                     // `/model` command and the dropdown both flow through

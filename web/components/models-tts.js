@@ -1,8 +1,11 @@
 import { html } from 'lit';
 import { LightElement } from '../lib/base.js';
 
+// Audio formats accepted by the OpenAI-compatible `/audio/speech` endpoint.
+const TTS_RESPONSE_FORMATS = ['mp3', 'opus', 'aac', 'flac', 'wav', 'pcm'];
+
 function emptyTtsForm() {
-  return { provider_id: '', model_id: '', voice_id: '', name: '', description: '', instructions: '', priority: 100 };
+  return { provider_id: '', model_id: '', voice_id: '', name: '', description: '', instructions: '', response_format: '', priority: 100 };
 }
 
 export class ModelsTtsSection extends LightElement {
@@ -105,10 +108,11 @@ export class ModelsTtsSection extends LightElement {
         provider_id:  r.provider_id,
         model_id:     r.model_id,
         voice_id:     r.voice_id     ?? '',
-        name:         r.name,
-        description:  r.description  ?? '',
-        instructions: r.instructions ?? '',
-        priority:     r.priority,
+        name:            r.name,
+        description:     r.description     ?? '',
+        instructions:    r.instructions    ?? '',
+        response_format: r.response_format ?? '',
+        priority:        r.priority,
       };
       this._modal = { mode: 'edit', id: r.id, name: r.name };
     } catch (e) {
@@ -140,6 +144,7 @@ export class ModelsTtsSection extends LightElement {
       name:         f.name || f.model_id,
       description:  f.description  || null,
       instructions: f.instructions || null,
+      response_format: f.response_format || null,
       priority:     Number(f.priority) || 100,
     };
   }
@@ -220,6 +225,7 @@ export class ModelsTtsSection extends LightElement {
           ${!isPlugin ? html`<span class="llm-provider-name">${m.provider_name}</span>` : ''}
           <span class="llm-model-id">${isPlugin ? m.model_id || m.id : m.model_id}</span>
           ${m.voice_id ? html`<span class="llm-model-id" style="opacity:0.6" title="Voice ID">${m.voice_id}</span>` : ''}
+          ${m.response_format ? html`<span class="llm-model-id" style="opacity:0.6" title="Response format">${m.response_format}</span>` : ''}
           ${!isPlugin ? html`<span class="ig-priority-tag" title="Priority">#${m.priority}</span>` : ''}
         </div>
 
@@ -337,9 +343,12 @@ export class ModelsTtsSection extends LightElement {
                 Voice ID <span class="text-muted fw-normal">(optional — required for ElevenLabs)</span>
               </label>
               <input type="text" class="form-control form-control-sm" .value=${f.voice_id}
-                placeholder="e.g. 21m00Tcm4TlvDq8ikWAM"
+                placeholder="e.g. alloy, Kore, 21m00Tcm4TlvDq8ikWAM"
                 @input=${(e) => this._form = { ...this._form, voice_id: e.target.value }} />
-              <div class="form-text">For providers where voice and model are separate (e.g. ElevenLabs).</div>
+              <div class="form-text">
+                Speaker voice. OpenAI: <code>alloy</code>/<code>echo</code>/<code>nova</code>… (default <code>alloy</code> if empty);
+                Gemini: <code>Kore</code>/<code>Puck</code>/<code>Zephyr</code>…; ElevenLabs: the voice ID.
+              </div>
             </div>
 
             <div class="mb-3">
@@ -366,6 +375,23 @@ export class ModelsTtsSection extends LightElement {
                 placeholder="e.g. Speak in a calm, neutral tone. Pause slightly between sentences."
                 @input=${(e) => this._form = { ...this._form, instructions: e.target.value }}></textarea>
               <div class="form-text">Voice/tone guidance injected into the LLM system prompt when this model is active.</div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label fw-semibold" style="font-size:0.82rem">
+                Response format <span class="text-muted fw-normal">(optional)</span>
+              </label>
+              <select class="form-select form-select-sm" .value=${f.response_format}
+                @change=${(e) => this._form = { ...this._form, response_format: e.target.value }}>
+                <option value="">Provider default (mp3)</option>
+                ${TTS_RESPONSE_FORMATS.map(fmt => html`
+                  <option value=${fmt}>${fmt}</option>
+                `)}
+              </select>
+              <div class="form-text">
+                Audio format requested from the provider. Leave empty unless the model requires
+                a specific one — e.g. Gemini TTS only accepts <code>pcm</code>.
+              </div>
             </div>
 
             <div class="mb-3">

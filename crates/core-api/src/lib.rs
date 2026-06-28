@@ -12,6 +12,7 @@ pub mod inbox;
 pub mod interface_tool;
 pub mod location;
 pub mod memory;
+pub mod message_meta;
 pub mod plugin;
 pub mod provider;
 pub mod remote;

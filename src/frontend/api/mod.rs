@@ -18,6 +18,7 @@ pub mod sessions;
 pub mod transcribe_audio;
 pub mod transcribe_models;
 pub mod tts_models;
+pub mod uploads;
 pub mod ws;
 pub mod ws_session;
 
@@ -25,7 +26,7 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::State,
+    extract::{DefaultBodyLimit, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
@@ -42,6 +43,9 @@ pub fn router() -> Router<Arc<Skald>> {
         .route("/sessions/{id}",                        get(sessions::get_session_detail))
         .route("/web/messages",                         get(sessions::web_messages))
         .route("/{source}/messages",                    get(sessions::source_messages))
+        // File attachments: streamed to disk, so the default body-size limit is
+        // disabled on this route only.
+        .route("/{source}/uploads",                     post(uploads::upload).layer(DefaultBodyLimit::disable()))
         .route("/web/tools/{tool_call_id}/resolve",     post(sessions::web_resolve_tool))
         .route("/ws",                                   get(ws::handler))
         .route("/ws/session/{id}",                      get(ws_session::handler))

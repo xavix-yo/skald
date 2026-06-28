@@ -529,7 +529,37 @@ async fn migrate_tables(pool: &SqlitePool) -> Result<()> {
     }
 
     // Future migrations go here, e.g.:
-    // if version < 17 { … ; bump schema_version to '17' }
+    // if version < 18 { … ; bump schema_version to '18' }
+
+    // v17 — generic per-message metadata column (JSON): file attachments today,
+    // extensible later. Runs on fresh DBs too (version stays 0 above), so the
+    // column is added here rather than in create_tables to avoid a duplicate.
+    if version < 17 {
+        sqlx::query("ALTER TABLE chat_history ADD COLUMN metadata TEXT")
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO config(key, value, updated_at)
+             VALUES('schema_version', '17', datetime('now'))",
+        )
+        .execute(pool)
+        .await?;
+    }
+
+    // v18 — per-model TTS `response_format` (mp3/opus/aac/flac/wav/pcm). NULL ⇒
+    // provider default (mp3). Some models reject mp3 and require a specific value
+    // (e.g. Gemini TTS only accepts pcm). Added here so it also runs on fresh DBs.
+    if version < 18 {
+        sqlx::query("ALTER TABLE tts_models ADD COLUMN response_format TEXT")
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO config(key, value, updated_at)
+             VALUES('schema_version', '18', datetime('now'))",
+        )
+        .execute(pool)
+        .await?;
+    }
 
     match existing {
         None => crate::boot::section(format!(

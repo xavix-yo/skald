@@ -17,6 +17,7 @@ use std::sync::atomic::AtomicU64;
 use tokio::sync::{Mutex, Notify};
 
 use core_api::chat_hub::SendMessageOptions;
+use core_api::message_meta::MessageMetadata;
 
 /// One queued user message awaiting dispatch.
 pub(super) struct QueuedMessage {
@@ -53,10 +54,20 @@ pub(super) fn build_unit(
 
     let mut prompts = vec![first.prompt];
     let mut opts = first.opts;
+    // Accumulate attachments across the whole coalesced run: `opts` keeps the most
+    // recent message's options, so without this union the files attached to an
+    // earlier message (sent moments before the latest) would be silently dropped.
+    let mut attachments = opts.metadata.take().map(|m| m.attachments).unwrap_or_default();
     while pending.front().is_some_and(|m| !m.opts.is_synthetic) {
         let m = pending.pop_front().unwrap();
         prompts.push(m.prompt);
         opts = m.opts; // keep the most recent opts
+        if let Some(meta) = opts.metadata.take() {
+            attachments.extend(meta.attachments);
+        }
+    }
+    if !attachments.is_empty() {
+        opts.metadata = Some(MessageMetadata { attachments });
     }
     Some((prompts.join("\n\n"), opts))
 }
@@ -94,6 +105,36 @@ mod tests {
         assert!(opts.is_synthetic);
         // The user message remains for the next unit.
         assert_eq!(q.len(), 1);
+    }
+
+    fn msg_with_attachment(prompt: &str, path: &str) -> QueuedMessage {
+        use core_api::message_meta::{Attachment, MessageMetadata};
+        QueuedMessage {
+            prompt: prompt.to_string(),
+            opts: SendMessageOptions {
+                metadata: Some(MessageMetadata {
+                    attachments: vec![Attachment {
+                        path: path.to_string(),
+                        name: path.to_string(),
+                        mimetype: None,
+                        filesize: None,
+                    }],
+                }),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn coalescing_unions_attachments_across_user_messages() {
+        let mut q = VecDeque::from(vec![
+            msg_with_attachment("first", "a.pdf"),
+            msg_with_attachment("second", "b.pdf"),
+        ]);
+        let (prompt, opts) = build_unit(&mut q).unwrap();
+        assert_eq!(prompt, "first\n\nsecond");
+        let paths: Vec<_> = opts.metadata.unwrap().attachments.into_iter().map(|a| a.path).collect();
+        assert_eq!(paths, vec!["a.pdf", "b.pdf"]);
     }
 
     #[test]

@@ -47,6 +47,7 @@ UI-only — the session persists and can be reopened from the board.
 |---|---|---|
 | `content` | `String` | The user's prompt text |
 | `client` | `Option<String>` | Named LLM model override (or `"auto"`) |
+| `attachments` | `Attachment[]` | Files uploaded beforehand via `POST /api/{source}/uploads`; each `{ path, name, mimetype?, filesize? }`. See [Attachments](#attachments) |
 
 ---
 
@@ -73,12 +74,41 @@ All events are JSON objects with a `"type"` tag (snake_case).
 | `llm_failed` | `tried`, `last_error` | All LLM fallback attempts exhausted |
 | `approval_required` | `request_id`, `tool_call_id`, `tool_name`, `arguments` | Non-file tool call requires user approval |
 | `approval_resolved` | `request_id`, `approved` | Approval resolved (any source); all clients update their UI |
-| `user_message` | `content` | User message broadcast to other clients of the same source |
+| `user_message` | `content`, `attachments?` | User message broadcast to other clients of the same source; carries the typed text + structured attachments (never the `[SYSTEM INFO]` block) |
 | `new_session` | `session_id` | Session was cleared (`/new`, `/clear`); clients reset their message list |
 | `turn_running` | `running` | Sent to a client on (re)connect: whether a turn is in flight for its session, so a reloaded page restores the SEND→STOP button |
 | `client_selected` | `client` | The pinned LLM client for the source changed (`/model` command or dropdown change). Clients update their dropdown/select to match — the backend is the single source of truth |
 
 ---
+
+## Attachments
+
+The desktop copilot and the mobile chat page let the user attach files to a message.
+Files are added with the paperclip button, **drag & drop** onto the composer, or **paste**
+(`Ctrl+V`) — all handled by `ChatSession._addFiles` / `_onDrop` / `_onPaste` in
+`web/lib/chat-session.js`. Text is required: a message is never sent with attachments alone.
+
+Flow:
+
+1. On selection, each file is uploaded immediately to `POST /api/{source}/uploads`
+   (multipart). The handler (`src/frontend/api/uploads.rs`) **streams** each part straight
+   to `data/uploads/{session_id}/` (`field.chunk()` → file, never buffered in RAM) and the
+   route disables the default body-size limit. It returns the saved `Attachment`s
+   (`{ path, name, mimetype, filesize }`, `path` project-root-relative so `/data/…` serves it).
+2. The pending attachments render as **chips above the textarea** (`renderAttachmentChips` in
+   `copilot-render.js`, `removable: true`, with a spinner while the upload is in flight).
+3. On send, the client posts `{ content, attachments }` over the WebSocket. `content` is the
+   clean typed text; `attachments` are the uploaded objects.
+4. Server-side (`ws.rs`), the typed text is broadcast as `user_message` (with `attachments`)
+   and persisted as the single user `chat_history` row; the attachments are stored in the
+   generic `metadata` JSON column. **The `[SYSTEM INFO]` block the LLM sees is generated on the
+   fly** by the message builder from `metadata.attachments` (path-only — the agent reads the
+   files with its own tools), so `content` and the UI stay clean. On reload, `build_items`
+   surfaces `attachments` again so the chips reappear (clickable → file viewer).
+
+The Telegram plugin reuses the same `MessageMetadata`/`Attachment` types for Document/Photo
+uploads, so those render as chips too when viewing the `telegram` source — see
+[plugins/telegram.md](plugins/telegram.md).
 
 ## Slash Commands (Web Copilot)
 
@@ -164,7 +194,7 @@ Cancel message (abort current turn): `{"type":"cancel"}`
 
 | File | Element | Responsibility |
 |---|---|---|---|
-| `web/lib/chat-session.js` | `ChatSession` (base) | Shared WS logic, message state, all approval/LLM event handling, **voice recording + transcription** (`_checkTranscribe`, `_startRecording`, `_stopRecording`, `_toggleRecording`, `_submitAudio`; renders a mic button when `/api/transcribe/has` returns 204), and textarea helpers (`_inputEl` hook, `_autoResize`). Subclasses override `_wsSource`, `_inputEl`, `_getInputContent`/`_clearInput` (defaults now driven by `_inputEl`), `_scrollToBottom`, `_onMessagePushed`. Effective source is `_source` (`_activeSource ?? _wsSource`); `_switchSource(source)` tears down the WS, reloads history, and reconnects to switch sessions live |
+| `web/lib/chat-session.js` | `ChatSession` (base) | Shared WS logic, message state, all approval/LLM event handling, **voice recording + transcription** (`_checkTranscribe`, `_startRecording`, `_stopRecording`, `_toggleRecording`, `_submitAudio`; renders a mic button when `/api/transcribe/has` returns 204), and textarea helpers (`_inputEl` hook, `_autoResize`). Subclasses override `_wsSource`, `_inputEl`, `_getInputContent`/`_clearInput` (defaults now driven by `_inputEl`), `_scrollToBottom`, `_onMessagePushed`. Effective source is `_source` (`_activeSource ?? _wsSource`); `_switchSource(source)` tears down the WS, reloads history, and reconnects to switch sessions live. **Attachments** (`_attachments` state, `_addFiles`/`_removeAttachment`/`_onDrop`/`_onPaste`): upload on selection, send with the next message — see [Attachments](#attachments) |
 | `web/components/copilot.js` | `<app-copilot>` | Desktop copilot panel (`_wsSource='web'`); resize, composer input with model pill and auto-resize textarea. **Voice recording is inherited from `ChatSession`**; only the desktop-only Ctrl+Space push-to-talk shortcut (`_onKeydown`/`_onKeyup`) lives here. Browser-style tabs (`General` + project chats); listens for the `project-chat-open` window event to add/focus a project tab |
 | `web/components/shared/chat-page.js` | `<chat-page>` | Mobile chat page; extends `ChatSession` with a mobile-specific layout. Composer mirrors the desktop copilot: a single unified box (`.chat-page-composer`) wrapping an auto-resizing textarea with a toolbar below — toolbar-left holds a native `<select>` model pill (`auto` + providers, opens the OS picker), toolbar-right holds the mic button (inherited recording) and the send/stop button. **Enter inserts a newline** (no Shift+Enter on mobile) — only the send button submits. The `source` prop (default `mobile`) re-points the chat: when it changes the component calls `_switchSource` to bind to a project's `project-{id}` session; it also honours `source` on the first connect (cold deep link from the native shell); inside a project the header shows the project `label` + a back button that emits `project-exit` |
 | `web/components/shared/projects-page.js` | `<projects-page>` | Mobile project list. Loads `GET /api/projects`; tapping a project `POST`s `/api/projects/{id}/session` and emits a `project-open` event (`{source, label}`) so `<mobile-app>` re-points the chat |
@@ -190,6 +220,10 @@ Cancel message (abort current turn): `{"type":"cancel"}`
 | `web/components/session-detail.js` | `<session-detail-page>` | Read-only debug view of any session. Navigate to `#session/{id}` to load. Shows full message tree with tool calls, sub-agent frames, synthetic user messages, and collapsible reasoning blocks. Not linked from the sidebar — accessed by typing the hash directly. |
 
 All components extend `LightElement` from `web/lib/base.js` (Lit-based).
+
+### Markdown rendering & link behavior
+
+`renderMarkdown(text)` (in `web/lib/base.js`) is the single entry point for rendering assistant/file markdown: it runs `marked.parse` then `DOMPurify.sanitize`. **External links** (http/https whose origin differs from the page) get `target="_blank" rel="noopener noreferrer"` via a DOMPurify `uponSanitizeElement` hook, so they open in a new tab instead of navigating away from the app. Relative paths, hash anchors (e.g. the app's `#file_viewer?...` routing), and non-http schemes (`mailto:`, `tel:`) are left untouched, preserving in-app navigation and native handlers.
 
 ### Approval Rules navigation protocol
 
@@ -394,6 +428,13 @@ Path resolution is delegated to the backend via `GET /api/file?path=<enc>`
 work. The viewer reads text kinds via `res.text()` and binary kinds via
 `res.blob()` → object URL.
 
+A query parameter `?force_download=true` makes the handler add
+`Content-Disposition: attachment` so the browser **saves** the file instead of
+rendering it inline. The attachment filename is the path's basename — or, when
+combined with `?compile-latex=true` on a `.tex` source, `<stem>.pdf`. The
+filename is sanitised to visible ASCII (header-value constraint). This backs the
+header's **download button** (see below).
+
 A query parameter `?compile-latex=true` switches the handler into LaTeX mode
 when `path` is a `.tex` / `.latex` file: instead of returning the raw source,
 the server runs `latexmk -xelatex` (via `LatexCompiler` in
@@ -423,6 +464,21 @@ with the textual `latexmk` log in the body:
 | Compilation error | `422` | `latexmk` log (`text/plain`) |
 | `latexmk` not installed | `501` | Explanatory message |
 | Compile timeout (> 30s) | `504` | Explanatory message |
+
+### Header chrome
+
+Both chromes render a header with the file name and a **download button**
+(`bi-download`, right-aligned). The button calls `_download()` in
+`FileViewerBase`, which builds `/api/file?path=…&force_download=true` (adding
+`compile-latex=true` for LaTeX kinds, so a `.tex` always downloads its compiled
+PDF) and clicks a transient `<a download>` — the server's `Content-Disposition`
+supplies the saved filename.
+
+The file name uses **tail-truncation**: when a path is too long the ellipsis is
+placed at the *start* (`…/dir/report.tex`) so the filename stays visible, via
+`direction: rtl; text-align: left` with the path wrapped in `<bdi>` (to keep its
+characters left-to-right). The full path remains on the `title` attribute. The
+desktop chrome shows the full path; the mobile chrome shows only the basename.
 
 ### Supported kinds
 

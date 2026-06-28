@@ -9,15 +9,16 @@ struct TtsModelRow {
     provider_id:  i64,
     model_id:     String,
     voice_id:     Option<String>,
-    name:         String,
-    description:  Option<String>,
-    instructions: Option<String>,
-    priority:     i64,
+    name:            String,
+    description:     Option<String>,
+    instructions:    Option<String>,
+    response_format: Option<String>,
+    priority:        i64,
 }
 
 pub async fn load_all(pool: &SqlitePool) -> Result<Vec<TtsModelRecord>> {
     let rows = sqlx::query_as::<_, TtsModelRow>(
-        "SELECT id, provider_id, model_id, voice_id, name, description, instructions, priority
+        "SELECT id, provider_id, model_id, voice_id, name, description, instructions, response_format, priority
          FROM tts_models
          WHERE removed_at IS NULL
          ORDER BY priority ASC, name ASC",
@@ -35,7 +36,7 @@ pub async fn insert(pool: &SqlitePool, r: &TtsModelRecord) -> Result<i64> {
     let restored = sqlx::query_scalar::<_, i64>(
         "UPDATE tts_models
          SET provider_id=?1, model_id=?2, voice_id=?3, name=?4,
-             description=?5, instructions=?6, priority=?7, removed_at=NULL
+             description=?5, instructions=?6, priority=?7, response_format=?8, removed_at=NULL
          WHERE id = (
              SELECT id FROM tts_models
              WHERE removed_at IS NOT NULL
@@ -51,6 +52,7 @@ pub async fn insert(pool: &SqlitePool, r: &TtsModelRecord) -> Result<i64> {
     .bind(&r.description)
     .bind(&r.instructions)
     .bind(r.priority as i64)
+    .bind(&r.response_format)
     .fetch_optional(pool)
     .await
     .context("tts_models: restore soft-deleted")?;
@@ -60,8 +62,8 @@ pub async fn insert(pool: &SqlitePool, r: &TtsModelRecord) -> Result<i64> {
     }
 
     sqlx::query_scalar::<_, i64>(
-        "INSERT INTO tts_models (provider_id, model_id, voice_id, name, description, instructions, priority)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+        "INSERT INTO tts_models (provider_id, model_id, voice_id, name, description, instructions, priority, response_format)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
          RETURNING id",
     )
     .bind(r.provider_id)
@@ -71,6 +73,7 @@ pub async fn insert(pool: &SqlitePool, r: &TtsModelRecord) -> Result<i64> {
     .bind(&r.description)
     .bind(&r.instructions)
     .bind(r.priority as i64)
+    .bind(&r.response_format)
     .fetch_one(pool)
     .await
     .context("tts_models: insert")
@@ -79,8 +82,8 @@ pub async fn insert(pool: &SqlitePool, r: &TtsModelRecord) -> Result<i64> {
 pub async fn update(pool: &SqlitePool, id: i64, r: &TtsModelRecord) -> Result<()> {
     sqlx::query(
         "UPDATE tts_models
-         SET provider_id=?1, model_id=?2, voice_id=?3, name=?4, description=?5, instructions=?6, priority=?7
-         WHERE id=?8",
+         SET provider_id=?1, model_id=?2, voice_id=?3, name=?4, description=?5, instructions=?6, priority=?7, response_format=?8
+         WHERE id=?9",
     )
     .bind(r.provider_id)
     .bind(&r.model_id)
@@ -89,6 +92,7 @@ pub async fn update(pool: &SqlitePool, id: i64, r: &TtsModelRecord) -> Result<()
     .bind(&r.description)
     .bind(&r.instructions)
     .bind(r.priority as i64)
+    .bind(&r.response_format)
     .bind(id)
     .execute(pool)
     .await
@@ -113,9 +117,10 @@ fn row_to_record(r: TtsModelRow) -> TtsModelRecord {
         provider_id:  r.provider_id,
         model_id:     r.model_id,
         voice_id:     r.voice_id,
-        name:         r.name,
-        description:  r.description,
-        instructions: r.instructions,
-        priority:     r.priority as i32,
+        name:            r.name,
+        description:     r.description,
+        instructions:    r.instructions,
+        response_format: r.response_format,
+        priority:        r.priority as i32,
     }
 }

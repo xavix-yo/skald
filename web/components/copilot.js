@@ -1,6 +1,6 @@
 import { html, nothing } from 'lit';
 import { ChatSession }   from '../lib/chat-session.js';
-import { renderMsg }     from './copilot-render.js';
+import { renderMsg, renderAttachmentChips } from './copilot-render.js';
 
 export class AppCopilot extends ChatSession {
   static properties = {
@@ -235,17 +235,33 @@ export class AppCopilot extends ChatSession {
       </div>
 
       <div class="copilot-input-area">
-        <div class="copilot-composer">
+        <div class="copilot-composer"
+             @dragover=${(e) => e.preventDefault()}
+             @drop=${(e) => this._onDrop(e)}>
+          ${renderAttachmentChips(this, this._attachments, { removable: true })}
+          <input
+            type="file"
+            multiple
+            class="copilot-file-input"
+            style="display:none"
+            @change=${(e) => { this._addFiles(e.target.files); e.target.value = ''; }}
+          />
           <textarea
             class="copilot-textarea"
             rows="1"
             placeholder="Ask the copilot… (Enter to send, Shift+Enter for new line)"
             @keydown=${this._handleKeydown}
             @input=${(e) => this._autoResize(e.target)}
+            @paste=${(e) => this._onPaste(e)}
             ?disabled=${this._waiting}
           ></textarea>
           <div class="copilot-toolbar">
             <div class="copilot-toolbar-left">
+              <button
+                class="copilot-toolbar-btn"
+                title="Attach files"
+                @click=${() => this.querySelector('.copilot-file-input')?.click()}
+              ><i class="bi bi-paperclip"></i></button>
               ${this._providers.length > 1 ? html`
                 <div class="copilot-model-wrap">
                   ${this._modelOpen ? html`

@@ -339,9 +339,13 @@ fn build_debug_items<'a>(
             let failed = msg.status == "failed";
             match msg.role {
                 chat_history::Role::User => {
+                    let attachments = msg.metadata.as_ref()
+                        .map(|m| m.attachments.clone())
+                        .unwrap_or_default();
                     items.push(json!({
                         "kind":         "user",
                         "content":      msg.content,
+                        "attachments":  attachments,
                         "failed":       failed,
                         "is_synthetic": msg.is_synthetic,
                         "created_at":   msg.created_at,
@@ -448,7 +452,12 @@ fn build_items<'a>(
                     if msg.is_synthetic {
                         continue;
                     }
-                    items.push(json!({ "kind": "user", "content": msg.content, "failed": failed }));
+                    // `content` stays clean (typed text); attachments are surfaced
+                    // structurally so the UI renders chips, not the LLM-facing block.
+                    let attachments = msg.metadata.as_ref()
+                        .map(|m| m.attachments.clone())
+                        .unwrap_or_default();
+                    items.push(json!({ "kind": "user", "content": msg.content, "attachments": attachments, "failed": failed }));
                 }
                 chat_history::Role::Agent => {}
                 chat_history::Role::Assistant => {

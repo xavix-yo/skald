@@ -514,3 +514,65 @@
   .copilot-agent-badge.done    { background: rgba(22, 163, 74, 0.18); color: #4ade80; }
   .copilot-agent-header        { background: rgba(99, 102, 241, 0.1); }
 }
+
+/* ── Attachment chips (composer pending + sent user bubble) ──────────────────── */
+
+.attach-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem;
+}
+
+/* Inside a user bubble the chips sit below the text with a little top spacing. */
+.copilot-msg.user .attach-chips {
+  padding: 0.4rem 0 0;
+}
+
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 100%;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--toolbar-border);
+  border-radius: 0.5rem;
+  background: var(--msg-assistant-bg);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.attach-chip--clickable { cursor: pointer; }
+.attach-chip--clickable:hover { border-color: #6366f1; }
+.attach-chip--uploading { opacity: 0.7; }
+
+.attach-chip .bi { font-size: 0.85rem; flex-shrink: 0; }
+
+.attach-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 12rem;
+}
+
+.attach-chip-size {
+  color: var(--placeholder-color);
+  flex-shrink: 0;
+}
+
+.attach-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: none;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: var(--placeholder-color);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.attach-chip-remove:hover { background: var(--sidebar-hover); color: #dc2626; }

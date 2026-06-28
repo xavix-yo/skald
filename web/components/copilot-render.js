@@ -330,11 +330,63 @@ function failedBadge() {
   </span>`;
 }
 
+// ── Attachment chips ───────────────────────────────────────────────────────────
+
+/** Bootstrap icon class for a file based on its MIME type / extension. */
+function attachmentIcon(att) {
+  const m = (att.mimetype || '').toLowerCase();
+  const n = (att.name || '').toLowerCase();
+  if (m.startsWith('image/'))                          return 'bi-file-earmark-image';
+  if (m === 'application/pdf' || n.endsWith('.pdf'))   return 'bi-file-earmark-pdf';
+  if (m.startsWith('audio/'))                          return 'bi-file-earmark-music';
+  if (m.startsWith('video/'))                          return 'bi-file-earmark-play';
+  if (m.startsWith('text/') || /\.(md|txt|csv|json|ya?ml|rs|js|ts|py)$/.test(n)) return 'bi-file-earmark-text';
+  return 'bi-file-earmark';
+}
+
+/** Human-readable file size, e.g. "1.2 MB". */
+function fmtSize(bytes) {
+  if (bytes == null) return '';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0, n = bytes;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${u[i]}`;
+}
+
+/**
+ * Render a list of attachment chips. Used both above the composer (pending
+ * uploads — `removable`, with an × button and a spinner while uploading) and
+ * inside a sent user bubble (clickable to open the file). `host` must provide
+ * `_removeAttachment(i)` when `removable` is true.
+ */
+export function renderAttachmentChips(host, attachments, { removable = false } = {}) {
+  if (!attachments?.length) return nothing;
+  return html`
+    <div class="attach-chips">
+      ${attachments.map((att, i) => html`
+        <div class="attach-chip ${att.uploading ? 'attach-chip--uploading' : ''} ${!removable && att.path ? 'attach-chip--clickable' : ''}"
+             title=${att.name}
+             @click=${() => { if (!removable && att.path) openFile(att.path); }}>
+          ${att.uploading
+            ? html`<span class="spinner-border spinner-border-sm"></span>`
+            : html`<i class="bi ${attachmentIcon(att)}"></i>`}
+          <span class="attach-chip-name">${att.name}</span>
+          ${att.filesize != null ? html`<span class="attach-chip-size">${fmtSize(att.filesize)}</span>` : nothing}
+          ${removable ? html`
+            <button class="attach-chip-remove" title="Remove"
+                    @click=${(e) => { e.stopPropagation(); host._removeAttachment(i); }}>
+              <i class="bi bi-x"></i>
+            </button>` : nothing}
+        </div>
+      `)}
+    </div>`;
+}
+
 export function renderMsg(host, msg) {
   try {
     switch (msg.kind) {
       case 'user':
-        return html`<div class="copilot-msg user ${msg.failed ? 'copilot-msg--failed' : ''}" style="white-space:pre-wrap">${msg.failed ? failedBadge() : nothing}${msg.content}</div>`;
+        return html`<div class="copilot-msg user ${msg.failed ? 'copilot-msg--failed' : ''}" style="white-space:pre-wrap">${msg.failed ? failedBadge() : nothing}${msg.content}${renderAttachmentChips(host, msg.attachments)}</div>`;
       case 'thinking':
         return html`
           <div class="copilot-msg assistant copilot-markdown ${msg.failed ? 'copilot-msg--failed' : ''}">

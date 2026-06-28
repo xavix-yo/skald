@@ -47,7 +47,7 @@ Private helper called by both `handle_message` and `resume_turn` to avoid duplic
 4. Call `build_agent_config(client_name, enabled_mcp_servers, extra_system_static, extra_system_dynamic, interface_tools)` → `AgentRunConfig`. This also calls `memory_manager.tools()` and stores them in `AgentRunConfig::memory_tools`.
 5. Get or create the active `chat_sessions_stack` frame.
 6. Check for orphaned user message (see below) and mark it `failed` if found.
-7. Append the user message to `chat_history` (with `is_synthetic` persisted); capture the returned `user_message_id`.
+7. Append the user message to `chat_history` (with `is_synthetic` and optional `metadata` persisted via `append_with_metadata`); capture the returned `user_message_id`. `metadata` (type `MessageMetadata` in `core-api`) carries file attachments for web/mobile/Telegram messages; `content` stays the clean typed text.
 8. Call `resume_pending_tools(stack_id, &config, &tx)` — re-gates and executes any `pending` tool calls left from an interrupted session.
 9. Call `run_agent_turn(stack_id, &config, &tx)` and await outcome.
 10. On `Final`: send `Done` event (and `Truncated` if applicable); then publish **two events** to `ChatEventBus` — one `User` event (with `is_synthetic` from the caller) and one `Assistant` event (with all `tool_calls` collected during the turn).
@@ -254,7 +254,7 @@ See *Context Compaction*.
 
 ### 4. Conversation history
 
-`chat_history` for the stack. When compaction is **disabled**, the list is truncated to `max_history_messages` (oldest dropped first). When compaction is **enabled**, `max_history_messages` has no effect — the compactor owns the token budget and truncating by count would silently discard history that should be summarised instead. Each assistant entry with tool calls in `chat_llm_tools` is reconstructed with a `tool_calls` array and one `tool` result message per call. The tool-result content is derived from the call's terminal status:
+`chat_history` for the stack. When compaction is **disabled**, the list is truncated to `max_history_messages` (oldest dropped first). When compaction is **enabled**, `max_history_messages` has no effect — the compactor owns the token budget and truncating by count would silently discard history that should be summarised instead. For a user/agent row that carries attachments in its `metadata` column, the builder appends an `[SYSTEM INFO]` block (`core_api::message_meta::attachments_block`, path-only) to that turn's content **on the fly** — the block is never persisted; `content` stays the clean typed text and the UI renders the same `metadata.attachments` as chips. Each assistant entry with tool calls in `chat_llm_tools` is reconstructed with a `tool_calls` array and one `tool` result message per call. The tool-result content is derived from the call's terminal status:
 
 | Status | LLM-visible `tool` content |
 | ------ | -------------------------- |

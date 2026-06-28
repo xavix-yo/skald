@@ -86,10 +86,11 @@ export class ProjectsPage extends LightElement {
           <div class="mobile-projects-list">
             ${projects.map(p => html`
               <div class="project-card" @click=${() => this._open(p)}>
+                <div class="project-card-icon">
+                  <i class="bi bi-folder2-open"></i>
+                </div>
                 <div class="project-card-main">
-                  <div class="project-card-name">
-                    <i class="bi bi-folder2"></i> ${p.name}
-                  </div>
+                  <div class="project-card-name">${p.name}</div>
                   ${p.description ? html`
                     <div class="project-card-desc">${p.description}</div>
                   ` : nothing}

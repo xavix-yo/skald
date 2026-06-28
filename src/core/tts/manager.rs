@@ -179,6 +179,7 @@ impl TtsManager {
             name:          s.record.name.clone(),
             description:   s.record.description.clone(),
             instructions:  s.record.instructions.clone(),
+            response_format: s.record.response_format.clone(),
             priority:      s.record.priority,
             from_plugin:   false,
         }).collect()
@@ -197,6 +198,7 @@ impl TtsManager {
             name:          p.name().to_string(),
             description:   p.description().map(str::to_string),
             instructions:  p.instructions().map(str::to_string),
+            response_format: None,
             priority:      0,
             from_plugin:   true,
         });
@@ -210,6 +212,7 @@ impl TtsManager {
             name:          s.record.name.clone(),
             description:   s.record.description.clone(),
             instructions:  s.record.instructions.clone(),
+            response_format: s.record.response_format.clone(),
             priority:      s.record.priority,
             from_plugin:   false,
         });

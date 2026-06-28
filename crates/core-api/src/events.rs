@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::message_meta::Attachment;
+
 // ── Client → Server ───────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
 pub struct ClientMessage {
     pub content: String,
+    /// Files attached to this message (uploaded beforehand via `POST /api/{source}/uploads`).
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 /// Typed data push from remote clients (iOS app, etc.).
@@ -192,6 +197,9 @@ pub enum ServerEvent {
     /// A user message was received; broadcast so secondary tabs/mobile see it.
     UserMessage {
         content: String,
+        /// Files attached to the message; lets secondary clients render chips live.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<Attachment>,
     },
     /// Sent to a client right after it (re)connects, reporting whether a turn is
     /// currently in flight for its session. Lets a reloaded page restore the

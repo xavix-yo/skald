@@ -170,6 +170,26 @@ export class FileViewerBase extends LightElement {
     this._teardownWatch();
   }
 
+  /**
+   * Download the current file. LaTeX sources always download the compiled PDF
+   * (`compile-latex=true`); every kind is served with `force_download=true` so
+   * the server sets `Content-Disposition: attachment` and the browser saves it
+   * (with the server-supplied name) instead of rendering inline.
+   */
+  _download() {
+    const path = this._path;
+    if (!path) return;
+    const params = new URLSearchParams({ path });
+    if (this._kind === 'latex') params.set('compile-latex', 'true');
+    params.set('force_download', 'true');
+    const a = document.createElement('a');
+    a.href = `/api/file?${params.toString()}`;
+    a.download = '';                 // server Content-Disposition supplies the name
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   _revokeBlobUrl() {
     if (this._blobUrl) {
       URL.revokeObjectURL(this._blobUrl);
