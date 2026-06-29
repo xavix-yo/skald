@@ -10,13 +10,13 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 mod inbox;
-use inbox::{QueuedMessage, SourceInbox, build_unit};
+use inbox::{QueuedMessage, SourceInbox, build_unit, drain_leading_user};
 
 use crate::core::approval::ApprovalManager;
 use crate::core::cron::TaskManager;
 use crate::core::db::{chat_history, chat_llm_tools, chat_sessions_stack, config, sources};
 use crate::core::events::{GlobalEvent, ServerEvent};
-use crate::core::session::handler::ChatSessionHandler;
+use crate::core::session::handler::{ChatSessionHandler, PendingMsg, PendingUserInput};
 use crate::core::session::manager::ChatSessionManager;
 use crate::core::tools::tool_names as tn;
 
@@ -173,6 +173,10 @@ impl ChatHub {
         source_id: &str,
         prompt:    &str,
         opts:      SendMessageOptions,
+        // Live user-input source for this turn (the source's inbox). The running
+        // turn drains it at each round boundary to inject messages queued while it
+        // was busy. `None` for synthetic turns, which never inject.
+        pending_input: Option<Arc<dyn PendingUserInput>>,
     ) -> anyhow::Result<()> {
         let agent_id = opts.agent_id.as_deref().unwrap_or("main");
         let session_id = self.get_or_create_session(source_id, agent_id).await?;
@@ -209,6 +213,7 @@ impl ChatHub {
             tx,
             opts.is_synthetic,
             opts.metadata,
+            pending_input,
         ).await
     }
 
@@ -533,9 +538,11 @@ impl ChatHub {
                 tokio::time::sleep(Duration::from_millis(SOURCE_COALESCE_DEBOUNCE_MS)).await;
             }
 
-            // Drain and dispatch units until the queue is empty. Messages that arrive
-            // while a turn runs accumulate in `pending` and are coalesced on the next
-            // iteration (coalesce-while-busy).
+            // Pop one message to seed a turn, then dispatch it. Messages that arrive
+            // while the turn runs are injected live at its round boundaries (the turn
+            // drains `pending` itself via the `PendingUserInput` handle below); only
+            // messages that arrive after the turn's last boundary remain here and seed
+            // the next turn on a following iteration.
             loop {
                 let (unit, epoch) = {
                     let mut pending = inbox.pending.lock().await;
@@ -550,7 +557,12 @@ impl ChatHub {
                 if inbox.cancel_epoch.load(Ordering::Acquire) != epoch {
                     continue;
                 }
-                if let Err(e) = hub.dispatch_turn(&source_id, &prompt, opts).await {
+
+                // Live-injection source for this turn (real user turns only).
+                let pending_input: Option<Arc<dyn PendingUserInput>> = (!opts.is_synthetic)
+                    .then(|| Arc::new(InboxUserInput(Arc::clone(&inbox))) as Arc<dyn PendingUserInput>);
+
+                if let Err(e) = hub.dispatch_turn(&source_id, &prompt, opts, pending_input).await {
                     error!(%source_id, error = %e, "ChatHub: source turn failed");
                 }
             }
@@ -657,6 +669,23 @@ impl ChatHub {
         }
 
         info!("ChatHub: notification consumer stopped");
+    }
+}
+
+// ── Live user-input source ──────────────────────────────────────────────────
+
+/// Adapts a source's `SourceInbox` to the handler's `PendingUserInput` trait so a
+/// running turn can drain newly-queued user messages at its round boundaries.
+struct InboxUserInput(Arc<SourceInbox>);
+
+#[async_trait]
+impl PendingUserInput for InboxUserInput {
+    async fn drain_user(&self) -> Vec<PendingMsg> {
+        let mut pending = self.0.pending.lock().await;
+        drain_leading_user(&mut pending)
+            .into_iter()
+            .map(|d| PendingMsg { content: d.content, metadata: d.metadata })
+            .collect()
     }
 }
 

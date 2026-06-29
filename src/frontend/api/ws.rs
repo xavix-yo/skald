@@ -13,7 +13,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use crate::core::chat_hub::{ModelCommandOutcome, SendMessageOptions};
-use crate::core::events::{ClientMessage, GlobalEvent, ServerEvent};
+use crate::core::events::{ClientMessage, ServerEvent};
 use crate::core::skald::Skald;
 
 #[derive(Deserialize)]
@@ -303,14 +303,11 @@ async fn handle_socket(mut socket: WebSocket, skald: Arc<Skald>, source: String)
                 let metadata = (!attachments.is_empty())
                     .then(|| core_api::message_meta::MessageMetadata { attachments: attachments.clone() });
 
-                // Broadcast to all clients on the same source so they see the
-                // user message in real-time (other tabs, mobile, etc.). Carries the
-                // typed text + structured attachments — never the [SYSTEM INFO] block.
-                skald.chat_hub.emit(GlobalEvent {
-                    source:     Some(source.clone()),
-                    session_id: None,
-                    event:      ServerEvent::UserMessage { content: content.clone(), attachments },
-                });
+                // No echo here: the `UserMessage` event is emitted when the message is
+                // actually persisted to history (at turn start, or at a round boundary
+                // for messages injected mid-turn). This telnet-style echo is what makes
+                // the bubble appear in its correct position; clients never render the
+                // message optimistically on send.
 
                 let opts = SendMessageOptions {
                     metadata,

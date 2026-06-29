@@ -158,7 +158,8 @@ impl ChatSessionHandler {
         // string becomes the parent tool call's result, which `run_agent_turn`
         // persists and emits as `ToolDone` — so completion lives in one place.
         let _ = self.resume_pending_tools(child.id, &child_config, token, tx).await;
-        let outcome = self.run_agent_turn(child.id, &child_config, token, tx).await;
+        // Sub-agents never inject live user input.
+        let outcome = self.run_agent_turn(child.id, &child_config, token, tx, None).await;
 
         if let Err(e) = stack_mcp_grants::delete_for_stack(pool, child.id).await {
             tracing::warn!(stack_id = child.id, error = %e, "dispatch_sub_agent: failed to delete stack MCP grants");

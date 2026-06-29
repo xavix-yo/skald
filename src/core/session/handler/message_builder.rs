@@ -210,7 +210,19 @@ impl MessageBuilder {
                         ),
                         _ => entry.content.clone(),
                     };
-                    out.push(json!({ "role": "user", "content": content }));
+                    // Coalesce consecutive user/agent rows into a single `role:user`
+                    // turn. The DB keeps each message as its own row (distinct bubbles,
+                    // per-message attachments), but the model must see one clean user
+                    // turn — e.g. when several messages were injected back-to-back at a
+                    // round boundary, or queued together while idle. `for_stack` already
+                    // excludes `failed` rows, so only non-failed messages merge here.
+                    match out.last_mut() {
+                        Some(last) if last["role"] == "user" => {
+                            let prev = last["content"].as_str().unwrap_or("").to_string();
+                            last["content"] = Value::String(format!("{prev}\n\n{content}"));
+                        }
+                        _ => out.push(json!({ "role": "user", "content": content })),
+                    }
                 }
                 chat_history::Role::Assistant => {
                     let tool_calls = chat_llm_tools::for_message(pool, entry.id).await?;

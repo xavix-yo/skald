@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
+use async_trait::async_trait;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use tokio::sync::{Mutex, mpsc};
@@ -39,6 +40,26 @@ pub use interface_tools::{InterfaceTool, ToolFuture};
 pub const DEFAULT_MAX_TOOL_ROUNDS: usize = 20;
 
 pub(super) const MAX_AGENT_DEPTH: i64 = 5;
+
+/// A queued user message to be appended to history mid-turn (drained from the
+/// source inbox at a round boundary).
+pub struct PendingMsg {
+    pub content:  String,
+    pub metadata: Option<MessageMetadata>,
+}
+
+/// Source of queued user input for the in-flight turn. Implemented by `ChatHub`
+/// over a source's inbox; it lets `run_agent_turn` pull newly-queued user
+/// messages at each round boundary and inject them live into the running turn.
+///
+/// Passed as `Some` only for the root interactive turn. Sub-agents, resume, and
+/// non-interactive runners (cron, TIC) pass `None` — they never inject.
+#[async_trait]
+pub trait PendingUserInput: Send + Sync {
+    /// Drains the leading run of queued non-synthetic user messages, one entry
+    /// each. Returns empty when there is nothing to inject.
+    async fn drain_user(&self) -> Vec<PendingMsg>;
+}
 
 /// Control-flow signals returned as `anyhow::Error` by internal dispatch methods.
 /// Using a typed enum instead of two separate sentinel structs allows a single
@@ -437,6 +458,10 @@ impl ChatSessionHandler {
         // Structured metadata persisted on the user turn (e.g. file attachments).
         // The MessageBuilder derives the LLM-facing block; the UI renders chips.
         metadata:                     Option<MessageMetadata>,
+        // Queued user input for this source. When `Some`, `run_agent_turn` drains
+        // it at each round boundary and injects newly-arrived user messages into
+        // the running turn. `None` for sub-agents / resume / non-interactive runners.
+        pending_input:                Option<Arc<dyn PendingUserInput>>,
     ) -> anyhow::Result<()> {
         let _guard = self.processing.lock().await;
         // Fresh cancellation scope for this user message. Stored so `cancel()`
@@ -527,11 +552,22 @@ impl ChatSessionHandler {
         let user_content    = content.to_string(); // save before TurnOutcome::Final shadows `content`
         let user_message_id = chat_history::append_with_metadata(pool, stack.id, &chat_history::Role::User, content, is_synthetic, None, metadata.as_ref()).await?;
 
+        // Telnet-style echo: the bubble appears only once the message is persisted.
+        // Synthetic turns (TIC/notification) never produce a user bubble.
+        if !is_synthetic {
+            let attachments = metadata.as_ref().map(|m| m.attachments.clone()).unwrap_or_default();
+            tx.send(ServerEvent::UserMessage {
+                message_id: user_message_id,
+                content:    user_content.clone(),
+                attachments,
+            }).await.ok();
+        }
+
         // Resume any tool calls left pending from a previous interrupted session.
         // They are re-gated (rules may have changed) and executed before the LLM runs.
         self.resume_pending_tools(stack.id, &config, &token, &tx).await?;
 
-        let outcome = self.run_agent_turn(stack.id, &config, &token, &tx).await?;
+        let outcome = self.run_agent_turn(stack.id, &config, &token, &tx, pending_input.as_ref()).await?;
 
         match outcome {
             TurnOutcome::Final { content, message_id, input_tokens, output_tokens, truncated, tool_calls } => {

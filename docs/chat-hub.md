@@ -1,6 +1,6 @@
 # ChatHub
 
-`ChatHub` (`src/core/chat_hub/`) is the single entry point for **interactive, user-facing chat sessions** — web, mobile, Telegram, project chats. It owns the `source → session` mapping, serializes and **coalesces** incoming user messages per source, runs each turn through a `ChatSessionHandler`, and bridges every turn's events onto the global broadcast bus that connected clients subscribe to.
+`ChatHub` (`src/core/chat_hub/`) is the single entry point for **interactive, user-facing chat sessions** — web, mobile, Telegram, project chats. It owns the `source → session` mapping, serializes incoming user messages per source (injecting them into an in-flight turn where possible), runs each turn through a `ChatSessionHandler`, and bridges every turn's events onto the global broadcast bus that connected clients subscribe to.
 
 ## What it is — and is not
 
@@ -15,12 +15,12 @@ Keep that boundary: routing a non-interactive agent through ChatHub is a misuse.
 
 The `sources` table (`src/core/db/sources.rs`) maps each `source_id` to its `active_session_id`. `get_or_create_session` looks it up and lazily creates a session on first use; `provision_session(reset=true)` discards the current session and starts a fresh one (emitting a `NewSession` event). `clear(source)` is the thin wrapper used by `/clear` / "new conversation".
 
-## Per-source inbox (serialization + coalescing)
+## Per-source inbox (serialization + live injection)
 
 Each source gets one **`SourceInbox`** and one **consumer task**, created lazily on the first message (`src/core/chat_hub/inbox.rs`). This sits *in front of* the handler's `processing` mutex and gives two properties the old per-message detached-spawn dispatch lacked:
 
 1. **FIFO ordering** — a single consumer per source means arrival order = execution order. (Previously each message was a detached `tokio::spawn` racing for the `processing` lock, so order was not guaranteed.)
-2. **Coalescing** — messages that arrive while a turn is running accumulate in the inbox and are merged into **one** follow-up turn instead of triggering N separate turns.
+2. **Live injection** — messages that arrive while a turn is running are **injected into the running turn** at its next round boundary (see [mid-turn injection](#mid-turn-injection-live-steering)), rather than waiting for a separate follow-up turn. Messages are kept as **individual** rows; coalescing for the LLM happens later in the `MessageBuilder` (merging consecutive user rows into one `role:user`), not in the inbox.
 
 ### Flow
 
@@ -32,21 +32,22 @@ send_message(source, prompt, opts)
 [per-source consumer task]
   → wait for notify (+ optional debounce window)
   → loop: build_unit(pending) → dispatch_turn(...) until the queue is empty
+        build_unit pops ONE message to seed a turn (no coalescing)
         dispatch_turn = resolve session/handler, bridge events to the global bus,
-        inject execute_task, call handler.handle_message (takes the processing lock)
+        inject execute_task, build the PendingUserInput handle (real user turns
+        only), call handler.handle_message (takes the processing lock)
 ```
 
-Because the consumer holds the inbox lock **only** while building a unit (never during the turn), messages keep arriving into `pending` during a turn and are drained on the next iteration — this is what realizes *coalesce-while-busy* with no polling.
+The consumer holds the inbox lock **only** while building a unit (never during the turn). While a turn runs, the turn itself drains `pending` at each round boundary via the `PendingUserInput` handle, so new messages are injected live; only messages that arrive *after* the turn's last boundary remain in `pending` and seed the next turn on a following iteration. The consumer and the in-flight turn never touch `pending` concurrently — the consumer is parked awaiting `dispatch_turn`.
 
-### Coalescing rules (`build_unit`)
+### Inbox helpers (`inbox.rs`)
 
-- Empty queue → nothing to do.
-- A **synthetic** message (`opts.is_synthetic` — notifications / TIC) is always dispatched **alone**, never merged with user text.
-- Otherwise, the leading run of consecutive **non-synthetic** messages is concatenated into one prompt joined by `"\n\n"`, using the most recent message's `opts` (interface tools / system context are identical across a single source's batch).
+- `build_unit(pending)` — pops a **single** message (no coalescing) to seed a turn. Empty queue → `None`.
+- `drain_leading_user(pending)` — drains the leading run of consecutive **non-synthetic** messages, returning them individually; stops at the first **synthetic** message (`opts.is_synthetic` — notifications / TIC), which is left for the notification path. Used by the running turn (via `InboxUserInput: PendingUserInput`) to inject queued user input at a round boundary.
 
 ### Idle debounce
 
-`SOURCE_COALESCE_DEBOUNCE_MS` (in `mod.rs`) defaults to **0** = pure coalesce-while-busy: a message to an idle source dispatches immediately. Raising it also batches messages sent rapidly to an *idle* source, at the cost of that latency on the first message of a burst.
+`SOURCE_COALESCE_DEBOUNCE_MS` (in `mod.rs`) defaults to **0**: a message to an idle source dispatches immediately. Raising it batches messages sent rapidly to an *idle* source, at the cost of that latency on the first message of a burst.
 
 ### `/stop` and `/clear`
 
@@ -67,7 +68,7 @@ Defined in `crates/core-api/src/chat_hub.rs`, implemented on `ChatHub`:
 
 | Method | Purpose |
 |--------|---------|
-| `send_message` | Enqueue a user message for a source (coalesced, async) |
+| `send_message` | Enqueue a user message for a source (async; injected into an in-flight turn, or seeds a new one) |
 | `register` | Register a source (no-op with the global bus) |
 | `clear` | New session for the source, discard the previous one |
 | `cancel` | Stop the in-flight turn + clear the queued backlog |
@@ -80,16 +81,22 @@ Defined in `crates/core-api/src/chat_hub.rs`, implemented on `ChatHub`:
 | `resolve_question` | Answer a pending `ask_user_clarification` |
 | `approve` / `reject` | Resolve a pending tool-call approval |
 
-## Forward-looking: mid-turn injection
+## Mid-turn injection (live steering)
 
-The per-source inbox centralizes pending user messages, which is the seam for a **future** capability: delivering a user message *into* an in-flight turn instead of waiting for it to finish. The LLM loop already rebuilds history fresh each round (`llm_loop.rs`), and `inject_async_result` (`src/core/cron/mod.rs`) is the existing precedent for appending to `chat_history` + `resume()` without a second `processing` lock. A future round-boundary hook in `run_agent_turn` could drain the inbox mid-turn, respecting role alternation (never inject between an assistant tool-call and its tool results). **Not implemented yet** — designed for.
+A message sent while a turn is already running is delivered *into* that turn instead of waiting for it to finish. This works because the LLM loop rebuilds history fresh from the DB each round (`llm_loop.rs`), so a `user` row appended at a round boundary is picked up by the next round automatically.
+
+- `dispatch_turn` builds an `InboxUserInput` (an `Arc<dyn PendingUserInput>` wrapping the `SourceInbox`) and passes it into `handle_message` → `run_agent_turn`. It is `Some` only for real user turns (never synthetic), and only the **root** turn receives it — sub-agents, resume, and non-interactive runners pass `None`.
+- At the top of each round, `run_agent_turn` calls `drain_user()` and appends each queued message as its own `chat_history` `user` row, then emits a `UserMessage` event carrying the new `message_id` (telnet-style echo — see [frontend.md](frontend.md)). A round boundary is the only clean ordering point: the previous round's assistant message and its tool results are all persisted, so a `user` row appended there is well-ordered (never between an assistant tool-call and its tool results).
+- Injection does **not** interrupt the in-flight LLM call or tool, and does **not** reset the round budget (`max_tool_rounds`).
+- `MessageBuilder` merges consecutive non-failed `user`/`agent` rows into one `role:user` for the LLM, so several injected messages read as a single clean user turn while the DB keeps them distinct.
+- `/stop` clears `pending` (`clear_inbox`): queued-but-not-yet-injected messages are dropped, never persisted, never echoed.
 
 ## Relevant files
 
 | Path | Role |
 |------|------|
 | `src/core/chat_hub/mod.rs` | `ChatHub`: API, dispatch, event bridge, notification consumer, per-source consumer |
-| `src/core/chat_hub/inbox.rs` | `SourceInbox`, `QueuedMessage`, `build_unit` (coalescing) + tests |
+| `src/core/chat_hub/inbox.rs` | `SourceInbox`, `QueuedMessage`, `build_unit` (single pop) + `drain_leading_user` (mid-turn injection) + tests |
 | `src/core/db/sources.rs` | `source → active_session_id` mapping |
 | `crates/core-api/src/chat_hub.rs` | `ChatHubApi` trait + `SendMessageOptions` |
 | `src/core/session/handler/` | `ChatSessionHandler` — the turn itself (see [session.md](session.md)) |
@@ -97,6 +104,6 @@ The per-source inbox centralizes pending user messages, which is the seam for a 
 ## When to update this file
 
 - New `ChatHubApi` methods or changed dispatch flow
-- Changes to inbox coalescing rules or the debounce constant
+- Changes to inbox draining (`build_unit` / `drain_leading_user`) or the debounce constant
 - Changes to `/stop` / `/clear` queue semantics
-- Implementing mid-turn injection
+- Changes to mid-turn injection (round-boundary drain, `PendingUserInput`)

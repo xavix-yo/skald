@@ -194,8 +194,14 @@ pub enum ServerEvent {
     NewSession {
         session_id: i64,
     },
-    /// A user message was received; broadcast so secondary tabs/mobile see it.
+    /// A user message was persisted to history; broadcast so every client (the
+    /// sender included) renders the bubble. Emitted at save time — when the row
+    /// is appended, either at turn start or at a round boundary for messages
+    /// injected mid-turn — so the bubble appears exactly where the agent saw it.
+    /// Clients render purely from this echo (no optimistic local rendering).
     UserMessage {
+        /// Id of the `chat_history` row just written.
+        message_id: i64,
         content: String,
         /// Files attached to the message; lets secondary clients render chips live.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

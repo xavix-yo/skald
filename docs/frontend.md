@@ -74,7 +74,7 @@ All events are JSON objects with a `"type"` tag (snake_case).
 | `llm_failed` | `tried`, `last_error` | All LLM fallback attempts exhausted |
 | `approval_required` | `request_id`, `tool_call_id`, `tool_name`, `arguments` | Non-file tool call requires user approval |
 | `approval_resolved` | `request_id`, `approved` | Approval resolved (any source); all clients update their UI |
-| `user_message` | `content`, `attachments?` | User message broadcast to other clients of the same source; carries the typed text + structured attachments (never the `[SYSTEM INFO]` block) |
+| `user_message` | `message_id`, `content`, `attachments?` | A user message persisted to history, echoed to **every** client of the source (the sender included). Emitted at save time — at turn start, or at a round boundary for mid-turn injection — so the bubble lands in its correct position. Carries the typed text + structured attachments (never the `[SYSTEM INFO]` block) |
 | `new_session` | `session_id` | Session was cleared (`/new`, `/clear`); clients reset their message list |
 | `turn_running` | `running` | Sent to a client on (re)connect: whether a turn is in flight for its session, so a reloaded page restores the SEND→STOP button |
 | `client_selected` | `client` | The pinned LLM client for the source changed (`/model` command or dropdown change). Clients update their dropdown/select to match — the backend is the single source of truth |
@@ -99,16 +99,38 @@ Flow:
    `copilot-render.js`, `removable: true`, with a spinner while the upload is in flight).
 3. On send, the client posts `{ content, attachments }` over the WebSocket. `content` is the
    clean typed text; `attachments` are the uploaded objects.
-4. Server-side (`ws.rs`), the typed text is broadcast as `user_message` (with `attachments`)
-   and persisted as the single user `chat_history` row; the attachments are stored in the
-   generic `metadata` JSON column. **The `[SYSTEM INFO]` block the LLM sees is generated on the
-   fly** by the message builder from `metadata.attachments` (path-only — the agent reads the
-   files with its own tools), so `content` and the UI stay clean. On reload, `build_items`
+4. Server-side, the message is persisted as a user `chat_history` row, and a `user_message`
+   event (carrying its `message_id` + `attachments`) is broadcast **at save time** — at turn
+   start, or at a round boundary for messages injected mid-turn (see *Telnet-style echo* below).
+   The attachments are stored in the generic `metadata` JSON column. **The `[SYSTEM INFO]` block
+   the LLM sees is generated on the fly** by the message builder from `metadata.attachments`
+   (path-only — the agent reads the files with its own tools), so `content` and the UI stay
+   clean. On reload, `build_items`
    surfaces `attachments` again so the chips reappear (clickable → file viewer).
 
 The Telegram plugin reuses the same `MessageMetadata`/`Attachment` types for Document/Photo
 uploads, so those render as chips too when viewing the `telegram` source — see
 [plugins/telegram.md](plugins/telegram.md).
+
+## Sending messages: telnet-style echo + mid-turn injection
+
+The client does **not** render the user's message optimistically. `_send()` clears the
+composer and posts `{ content, attachments }` over the WebSocket; the bubble appears only when
+the backend persists the message and echoes it back as a `user_message` event (with its real
+`message_id`). This "telnet" model makes the backend the single source of truth — no
+client-generated id, no content-based dedup, and every client (the sender included) renders the
+same echo. The `user_message` handler in `chat-session.js` therefore just pushes a bubble; the
+old dedup against a local optimistic push is gone.
+
+- **Sending while a turn is running is allowed.** The composer is no longer disabled on
+  `_waiting`, and the send button is shown **alongside** the STOP button during a turn (Enter
+  still sends on desktop). The message is queued and [injected into the running turn](session.md#mid-turn-injection)
+  at its next round boundary; the bubble appears (via echo) at that moment — i.e. after the
+  current round's tools, where the agent actually sees it. With a long-running tool the echo is
+  delayed until the round ends.
+- **Slash commands are the exception:** they are handled server-side and never persisted/echoed,
+  so `_send()` renders them optimistically (`content.startsWith('/')`).
+- A `/stop` before the next round boundary drops the queued message: no echo, no bubble.
 
 ## Slash Commands (Web Copilot)
 

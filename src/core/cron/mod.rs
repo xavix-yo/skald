@@ -408,6 +408,7 @@ async fn run_job(
             tx,
             false,
             None,
+            None, // non-interactive: no live user-message injection
         ).await
     });
 

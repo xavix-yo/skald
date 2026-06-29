@@ -338,15 +338,19 @@ export class ChatSession extends LightElement {
         this._push({ kind: 'info', content: `⚡ Model fallback: ${msg.from} → ${msg.to}` });
         break;
 
-      case 'user_message': {
-        // Deduplicate: the sending client already pushed this locally in _send().
-        // Other clients (different tabs, mobile) push it here.
-        const last = this._messages[this._messages.length - 1];
-        if (!(last?.kind === 'user' && last.content === msg.content)) {
-          this._push({ kind: 'user', content: msg.content, attachments: msg.attachments ?? [] });
-        }
+      case 'user_message':
+        // Telnet-style echo: the backend emits this when the message is persisted
+        // to history, so we render the bubble here — for the sending client and
+        // every other client alike. No dedup needed: regular messages are never
+        // rendered optimistically (only slash commands are, and those are never
+        // echoed). `message_id` is the real chat_history row id.
+        this._push({
+          kind:        'user',
+          content:     msg.content,
+          attachments: msg.attachments ?? [],
+          message_id:  msg.message_id,
+        });
         break;
-      }
 
       case 'new_session':
         this._messages = [];
@@ -418,7 +422,9 @@ export class ChatSession extends LightElement {
   async _send() {
     const content = this._getInputContent();
     // Text is required; attachments are a complement, never sent on their own.
-    if (!content || this._waiting) return;
+    // Sending is allowed while a turn is in flight: the message is queued and
+    // injected into the running turn at its next round boundary.
+    if (!content) return;
     // Don't send while an attachment is still streaming to disk, or its path
     // would be missing from the message.
     if (this._attachments.some(a => a.uploading)) return;
@@ -435,7 +441,14 @@ export class ChatSession extends LightElement {
       ({ name, path, mimetype, filesize }));
     this._attachments = [];
 
-    this._push({ kind: 'user', content, attachments });
+    // Slash commands are handled server-side and are never persisted/echoed as a
+    // user row, so render them optimistically. Regular messages use telnet-style
+    // echo: no local push — the bubble appears only when the backend persists the
+    // message and sends it back as a `user_message` event, placing it correctly
+    // (e.g. after the current round's tools when injected mid-turn).
+    if (content.startsWith('/')) {
+      this._push({ kind: 'user', content, attachments });
+    }
     this._waiting = true;
 
     if (this._ws?.readyState === WebSocket.OPEN) {

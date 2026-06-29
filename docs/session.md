@@ -47,9 +47,9 @@ Private helper called by both `handle_message` and `resume_turn` to avoid duplic
 4. Call `build_agent_config(client_name, enabled_mcp_servers, extra_system_static, extra_system_dynamic, interface_tools)` → `AgentRunConfig`. This also calls `memory_manager.tools()` and stores them in `AgentRunConfig::memory_tools`.
 5. Get or create the active `chat_sessions_stack` frame.
 6. Check for orphaned user message (see below) and mark it `failed` if found.
-7. Append the user message to `chat_history` (with `is_synthetic` and optional `metadata` persisted via `append_with_metadata`); capture the returned `user_message_id`. `metadata` (type `MessageMetadata` in `core-api`) carries file attachments for web/mobile/Telegram messages; `content` stays the clean typed text.
+7. Append the user message to `chat_history` (with `is_synthetic` and optional `metadata` persisted via `append_with_metadata`); capture the returned `user_message_id`. `metadata` (type `MessageMetadata` in `core-api`) carries file attachments for web/mobile/Telegram messages; `content` stays the clean typed text. For non-synthetic messages, emit a `UserMessage { message_id, content, attachments }` event right after the append — the telnet-style echo that makes the bubble appear (clients never render the message optimistically).
 8. Call `resume_pending_tools(stack_id, &config, &tx)` — re-gates and executes any `pending` tool calls left from an interrupted session.
-9. Call `run_agent_turn(stack_id, &config, &tx)` and await outcome.
+9. Call `run_agent_turn(stack_id, &config, &tx, pending_input)` and await outcome. `pending_input: Option<Arc<dyn PendingUserInput>>` is the source's inbox handle for [live mid-turn injection](#mid-turn-injection) — `Some` for interactive web/mobile turns, `None` for cron/tic.
 10. On `Final`: send `Done` event (and `Truncated` if applicable); then publish **two events** to `ChatEventBus` — one `User` event (with `is_synthetic` from the caller) and one `Assistant` event (with all `tool_calls` collected during the turn).
 11. On `Cancelled`: send `Error` event ("interrupted by user"); return `Err("Turn cancelled by user")`. Background runners (cron, tickets) see the `Err` and record the job as `"failed"`. The WS handler logs at INFO level (not ERROR) when it detects this error string, since the client already received the error event.
 12. On `Exhausted`: send `Error` event (tool round limit exceeded); return `Err(...)`. Background runners (cron, tickets) see the `Err` and record the job as `"failed"`. Interactive WS sessions already received the `ServerEvent::Error`; the returned `Err` is logged by the WS handler.
@@ -112,7 +112,7 @@ Called by `ChatHub::resume()` (routed through the global event bus) when the cli
 4. Get the active `chat_sessions_stack` frame — if none exists, return immediately.
 5. Call `resume_pending_tools(stack_id)`.
 6. **Guard**: if no pending tools were found AND the last assistant message has no associated tool calls (pure-text final response), the turn already completed — return immediately. If the last assistant message *does* have tool calls (e.g. a `task_completed` injected asynchronously), fall through so the LLM can process the results.
-7. Call `run_agent_turn(stack_id, &config, &token, &tx)`.
+7. Call `run_agent_turn(stack_id, &config, &token, &tx, None)` — resume never does live user-message injection (the `pending_input` arg is `None`).
 8. **Cascade loop**: while the current stack has a `parent_tool_call_id`, complete/fail the parent's tool call, terminate the child stack, and run `run_agent_turn` on the parent stack. Repeat until reaching the root (depth = 0). (Used only by restart recovery — normal sync recursion never leaves a child stack for the cascade to pick up.)
 9. At root: same `Final` / `Cancelled` / `Exhausted` handling as `handle_message`.
 
@@ -144,9 +144,10 @@ Dispatch checks it with a single `downcast_ref::<AgentFlowSignal>()`.
 
 Called recursively via `Box::pin` to support async recursion without stack overflow.
 
-Takes the per-turn `token: &CancellationToken` by value-clone from the caller. For each round (up to `max_tool_rounds`):
+Takes the per-turn `token: &CancellationToken` by value-clone from the caller, plus `pending_input: Option<&Arc<dyn PendingUserInput>>` (see [Mid-turn injection](#mid-turn-injection)). For each round (up to `max_tool_rounds`):
 
 1. Check `token.is_cancelled()` — return `Cancelled` immediately if set.
+1b. **Mid-turn injection**: if `pending_input` is `Some`, `drain_user()` and append each queued message as its own `user` row + emit a `UserMessage` echo. These rows are read by `build_openai_messages()` in this same round, so the model sees them immediately. `None` for sub-agents / resume / non-interactive runners.
 2. `build_openai_messages()` — reconstruct full context from DB.
 3. Call `llm.client.chat_with_tools(...)` wrapped in `tokio::select!` against `token.cancelled()`, so a `/stop` aborts the in-flight request and returns `Cancelled`.
 4. On `LlmTurn::Message` — persist assistant message, return `Final` (with all `tool_calls` accumulated across rounds).
@@ -165,6 +166,16 @@ Takes the per-turn `token: &CancellationToken` by value-clone from the caller. F
 7. If all rounds exhausted: return `Exhausted`.
 
 A sync sub-agent runs via `dispatch_sub_agent`, which awaits `run_agent_turn` recursively in the **same task** (same `processing` lock, same `token` clone) and returns the child's result as the parent tool call's result. Because parent and child share the token, a `/stop` that cancels a running child also stops the parent at its next check — no `WaitingChild` / task-spawn / resume cascade involved.
+
+### Mid-turn injection
+
+A user can send a message while a turn is still running, and the agent picks it up at its next round boundary — without `/stop` and without waiting for the whole turn to finish.
+
+- `run_agent_turn` receives `pending_input: Option<&Arc<dyn PendingUserInput>>` (the source's inbox handle from `ChatHub`). It is `Some` **only** for the root interactive turn; sub-agents (`dispatch_sub_agent`), `resume_turn`, and non-interactive runners (cron, tic) pass `None`.
+- At the top of each round (step 1b above), the turn drains the inbox and appends each queued message as its **own** `chat_history` `user` row, then emits a `UserMessage` event (telnet-style echo — see [frontend.md](frontend.md)). The round boundary is the only safe ordering point: the previous round's assistant message + tool results are all persisted, so a trailing `user` row is well-ordered.
+- It does **not** interrupt the in-flight LLM call or tool, and does **not** reset the round budget. Messages that arrive after the turn's last boundary stay queued and seed the next turn.
+- `MessageBuilder` later merges consecutive non-failed `user`/`agent` rows into one `role:user` (see *Context Building*), so several injected messages read as one clean user turn for the LLM while the DB keeps each message distinct.
+- A `/stop` clears the inbox, so queued-but-not-yet-injected messages are dropped, never persisted, never echoed. See [chat-hub.md](chat-hub.md) for the inbox/consumer side.
 
 ---
 
@@ -254,7 +265,7 @@ See *Context Compaction*.
 
 ### 4. Conversation history
 
-`chat_history` for the stack. When compaction is **disabled**, the list is truncated to `max_history_messages` (oldest dropped first). When compaction is **enabled**, `max_history_messages` has no effect — the compactor owns the token budget and truncating by count would silently discard history that should be summarised instead. For a user/agent row that carries attachments in its `metadata` column, the builder appends an `[SYSTEM INFO]` block (`core_api::message_meta::attachments_block`, path-only) to that turn's content **on the fly** — the block is never persisted; `content` stays the clean typed text and the UI renders the same `metadata.attachments` as chips. Each assistant entry with tool calls in `chat_llm_tools` is reconstructed with a `tool_calls` array and one `tool` result message per call. The tool-result content is derived from the call's terminal status:
+`chat_history` for the stack. When compaction is **disabled**, the list is truncated to `max_history_messages` (oldest dropped first). When compaction is **enabled**, `max_history_messages` has no effect — the compactor owns the token budget and truncating by count would silently discard history that should be summarised instead. For a user/agent row that carries attachments in its `metadata` column, the builder appends an `[SYSTEM INFO]` block (`core_api::message_meta::attachments_block`, path-only) to that turn's content **on the fly** — the block is never persisted; `content` stays the clean typed text and the UI renders the same `metadata.attachments` as chips. **Consecutive non-failed `user`/`agent` rows are coalesced into a single `role:user` message** (their contents joined by blank lines, attachment blocks preserved) — `for_stack` already excludes `failed` rows. This is what keeps the LLM context clean when several messages were stored as distinct rows, e.g. injected back-to-back mid-turn (see [Mid-turn injection](#mid-turn-injection)). Each assistant entry with tool calls in `chat_llm_tools` is reconstructed with a `tool_calls` array and one `tool` result message per call. The tool-result content is derived from the call's terminal status:
 
 | Status | LLM-visible `tool` content |
 | ------ | -------------------------- |
@@ -352,7 +363,7 @@ This means kill works correctly even when the task is blocked on `ask_user_clari
 
 Only one `handle_message` / `resume_turn` call can run per `ChatSessionHandler` at a time. The `processing: Mutex<()>` is held for the entire duration. A second call blocks until the first completes or is cancelled.
 
-Note that callers don't reach `handle_message` directly: `ChatHub` serializes user messages **per source** through a single-consumer inbox *before* the `processing` lock, and **coalesces** messages that arrive during an in-flight turn into one follow-up turn. So in practice the `processing` lock is rarely contended for interactive sources — see [chat-hub.md](chat-hub.md).
+Note that callers don't reach `handle_message` directly: `ChatHub` serializes user messages **per source** through a single-consumer inbox *before* the `processing` lock, and messages that arrive during an in-flight turn are **injected into that turn** at a round boundary (not queued as a separate turn). So in practice the `processing` lock is rarely contended for interactive sources — see [chat-hub.md](chat-hub.md).
 
 Synchronous sub-agents run **inline in the same task** as the parent (plain recursion in `dispatch_sub_agent`), so the single `processing` lock covers the whole parent+child tree — one user message is one logical critical section. (Asynchronous tasks — `execute_task` mode=async — are a separate mechanism: a new ephemeral session driven by the cron runner, whose result is later injected via `inject_async_result` → `resume_turn`.)
 

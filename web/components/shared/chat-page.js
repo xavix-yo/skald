@@ -155,7 +155,6 @@ export class ChatPage extends ChatSession {
               placeholder="Type a message…"
               @input=${(e) => this._autoResize(e.target)}
               @paste=${(e) => this._onPaste(e)}
-              ?disabled=${this._waiting}
             ></textarea>
             <div class="chat-page-toolbar">
               <div class="chat-page-toolbar-left">
@@ -192,12 +191,12 @@ export class ChatPage extends ChatSession {
                       @click=${() => this._cancel()}
                       title="Stop"
                     ><i class="bi bi-stop-fill"></i></button>`
-                  : html`<button
-                      class="chat-page-send"
-                      @click=${() => this._send()}
-                      title="Send"
-                    ><i class="bi bi-send-fill"></i></button>`
-                }
+                  : nothing}
+                <button
+                  class="chat-page-send"
+                  @click=${() => this._send()}
+                  title="Send"
+                ><i class="bi bi-send-fill"></i></button>
               </div>
             </div>
           </div>

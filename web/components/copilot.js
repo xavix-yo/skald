@@ -253,7 +253,6 @@ export class AppCopilot extends ChatSession {
             @keydown=${this._handleKeydown}
             @input=${(e) => this._autoResize(e.target)}
             @paste=${(e) => this._onPaste(e)}
-            ?disabled=${this._waiting}
           ></textarea>
           <div class="copilot-toolbar">
             <div class="copilot-toolbar-left">
@@ -302,10 +301,10 @@ export class AppCopilot extends ChatSession {
                 ? html`<button class="copilot-send-btn copilot-send-btn--stop" @click=${() => this._cancel()} title="Stop">
                     <i class="bi bi-stop-fill"></i>
                   </button>`
-                : html`<button class="copilot-send-btn" @click=${() => this._send()}>
-                    <i class="bi bi-send-fill"></i>
-                  </button>`
-              }
+                : nothing}
+              <button class="copilot-send-btn" @click=${() => this._send()} title="Send">
+                <i class="bi bi-send-fill"></i>
+              </button>
             </div>
           </div>
         </div>

@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -15,7 +16,7 @@ use crate::core::tools::{
 };
 use crate::core::run_context::RunContext;
 
-use super::{ApprovalDecision, ChatSessionHandler, TurnOutcome};
+use super::{ApprovalDecision, ChatSessionHandler, PendingUserInput, TurnOutcome};
 use super::interface_tools::AgentRunConfig;
 
 impl ChatSessionHandler {
@@ -29,6 +30,9 @@ impl ChatSessionHandler {
         config:   &'a AgentRunConfig,
         token:    &'a CancellationToken,
         tx:       &'a mpsc::Sender<ServerEvent>,
+        // Queued user input for live injection (root interactive turn only).
+        // `None` for sub-agents / resume / non-interactive runners.
+        pending_input: Option<&'a Arc<dyn PendingUserInput>>,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<TurnOutcome>> + Send + 'a>> {
         Box::pin(async move {
         let pool = &self.db;
@@ -51,6 +55,33 @@ impl ChatSessionHandler {
             if token.is_cancelled() {
                 return Ok(TurnOutcome::Cancelled);
             }
+
+            // ── Live user-message injection ─────────────────────────────────────
+            // A round boundary is the one clean ordering point: the previous
+            // round's assistant message + tool results are all persisted, so a
+            // `user` row appended here is well-ordered. Each queued message is
+            // saved individually and echoed (telnet-style: the bubble appears only
+            // now), then picked up by `build_openai_messages` below in this same
+            // round — so the model sees it immediately. The MessageBuilder merges
+            // consecutive user rows into one `role:user` for the LLM. Does not
+            // reset the round budget. Only ever `Some` for the root interactive turn.
+            if let Some(input) = pending_input {
+                for msg in input.drain_user().await {
+                    let attachments = msg.metadata.as_ref()
+                        .map(|m| m.attachments.clone())
+                        .unwrap_or_default();
+                    let id = chat_history::append_with_metadata(
+                        pool, stack_id, &chat_history::Role::User,
+                        &msg.content, false, None, msg.metadata.as_ref(),
+                    ).await?;
+                    tx.send(ServerEvent::UserMessage {
+                        message_id: id,
+                        content:    msg.content,
+                        attachments,
+                    }).await.ok();
+                }
+            }
+
             trace!(session_id = self.session_id, stack_id, agent_id = config.agent_id, round, "starting round");
 
             let active_grants_snapshot = config.active_mcp_grants

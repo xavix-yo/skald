@@ -78,7 +78,9 @@ impl ChatSessionHandler {
             }
         }
 
-        let mut current_outcome = self.run_agent_turn(stack.id, &config, &token, &tx).await?;
+        // Resume re-runs an interrupted turn; live injection only applies to a
+        // fresh interactive turn driven by handle_message.
+        let mut current_outcome = self.run_agent_turn(stack.id, &config, &token, &tx, None).await?;
         let mut current_stack = stack;
 
         // Cascade completion upward through parent stacks (handles app-restart recovery
@@ -146,7 +148,7 @@ impl ChatSessionHandler {
             );
 
             self.resume_pending_tools(parent_stack.id, &config, &token, &tx).await?;
-            current_outcome = self.run_agent_turn(parent_stack.id, &config, &token, &tx).await?;
+            current_outcome = self.run_agent_turn(parent_stack.id, &config, &token, &tx, None).await?;
             current_stack = parent_stack;
 
         }
